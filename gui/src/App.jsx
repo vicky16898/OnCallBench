@@ -45,6 +45,7 @@ function App() {
     const [refreshing, setRefreshing] = useState(false);
     const [statsDetail, setStatsDetail] = useState(null);
     const [lastRefreshed, setLastRefreshed] = useState(null);
+    const [copiedCmd, setCopiedCmd] = useState(null);
 
     useEffect(() => {
         document.documentElement.setAttribute('data-theme', theme);
@@ -790,7 +791,11 @@ function App() {
                                                     {step.command && (
                                                         <div className="relative flex items-center gap-2">
                                                             <code className="flex-1 p-3 bg-slate-900 rounded-xl text-[10px] font-mono text-indigo-300 truncate">{step.command}</code>
-                                                            <button onClick={() => navigator.clipboard.writeText(step.command)} className="p-2.5 bg-card border border-border rounded-xl text-muted-foreground hover:text-indigo-600 shadow-sm flex-shrink-0"><Command size={14} /></button>
+                                                            <button onClick={() => { navigator.clipboard.writeText(step.command); setCopiedCmd(i); setTimeout(() => setCopiedCmd(null), 2000); }}
+                                                                className={`p-2.5 border rounded-xl shadow-sm flex-shrink-0 transition-all ${copiedCmd === i ? 'bg-success/10 border-success/30 text-success' : 'bg-card border-border text-muted-foreground hover:text-indigo-600'}`}
+                                                            >
+                                                                {copiedCmd === i ? <CheckCircle2 size={14} /> : <Command size={14} />}
+                                                            </button>
                                                         </div>
                                                     )}
                                                 </div>
