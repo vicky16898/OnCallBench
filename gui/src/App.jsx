@@ -23,6 +23,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 
 const API_BASE = 'http://localhost:8000';
+const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
 
 function App() {
     const [activeTab, setActiveTab] = useState('dashboard');
@@ -93,7 +94,7 @@ function App() {
     const fetchInitialData = async () => {
         // 1. Fetch Namespaces
         try {
-            const nsRes = await axios.get(`${API_BASE}/namespaces`);
+            const nsRes = await api.get('/namespaces');
             const nsData = nsRes.data || [];
             setNamespaces(nsData);
 
@@ -109,7 +110,7 @@ function App() {
 
         // 2. Fetch Scenarios
         try {
-            const scRes = await axios.get(`${API_BASE}/scenarios`);
+            const scRes = await api.get('/scenarios');
             setScenarios(scRes.data || []);
         } catch (err) {
             console.error("Scenarios fetch failed");
@@ -117,7 +118,7 @@ function App() {
 
         // 3. Fetch Benchmarks
         try {
-            const benchRes = await axios.get(`${API_BASE}/benchmarks`);
+            const benchRes = await api.get('/benchmarks');
             setBenchmarks(benchRes.data || []);
         } catch (err) {
             console.error("Benchmarks fetch failed");
@@ -129,7 +130,7 @@ function App() {
     const fetchPods = async (ns) => {
         try {
             console.log(`Fetching pods for namespace: ${ns}`);
-            const res = await axios.get(`${API_BASE}/namespaces/${ns}/pods`);
+            const res = await api.get(`/namespaces/${ns}/pods`);
             setPods(res.data || []);
         } catch (err) {
             console.error("Pods fetch failed", err);
@@ -141,9 +142,7 @@ function App() {
         setStatsLoading(true);
         setStatsError(null);
         try {
-            const res = await axios.get(`${API_BASE}/stats`, {
-                params: { namespace: ns }
-            });
+            const res = await api.get('/stats', { params: { namespace: ns } });
             setStats(res.data);
         } catch (err) {
             console.error("Stats fetch failed", err);
@@ -157,7 +156,7 @@ function App() {
         setInjecting(id);
         setInjectResult(null);
         try {
-            const res = await axios.post(`${API_BASE}/inject/${id}`);
+            const res = await api.post(`/inject/${id}`);
             setInjectResult({ type: 'success', message: res.data?.message || `Scenario ${id} injected successfully` });
             setTimeout(() => {
                 fetchPods(selectedNS);
@@ -175,10 +174,7 @@ function App() {
         setDiagnosis(null);
         setDiagnosisError(null);
         try {
-            const res = await axios.post(`${API_BASE}/diagnose`, {
-                namespace: selectedNS,
-                pod_name: podName
-            });
+            const res = await api.post('/diagnose', { namespace: selectedNS, pod_name: podName });
             setDiagnosis(res.data);
         } catch (err) {
             console.error(err);
