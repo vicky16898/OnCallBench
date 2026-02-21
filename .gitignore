@@ -1,0 +1,56 @@
+# ========================
+# Environment & Secrets
+# ========================
+.env
+.env.local
+.env.*.local
+
+# ========================
+# Python
+# ========================
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ========================
+# Node / Frontend
+# ========================
+node_modules/
+gui/node_modules/
+gui/dist/
+*.log
+npm-debug.log*
+
+# ========================
+# Generated Data
+# ========================
+data/predictions/
+data/reports/
+data/bundles/
+
+# ========================
+# OS Files
+# ========================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ========================
+# IDEs & Editors
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ========================
+# Kubernetes (local)
+# ========================
+kubeconfig
+*.kubeconfig

@@ -1,0 +1,13 @@
+{
+    "scenario_id": "crashloop",
+    "name": "CrashLoopBackOff due to Bad Command",
+    "expected_symptoms": [
+        "Pod status: CrashLoopBackOff",
+        "Container exit code: 1"
+    ],
+    "root_cause": "The container command '/bin/sh -c exit 1' exits immediately with an error, triggering K8s restart policy.",
+    "fix_steps": "Update the deployment command to a long-running process like 'tail -f /dev/null'.",
+    "confirm_commands": [
+        "kubectl get pod -l app=crashloop -n oncall-bench -o jsonpath='{.items[0].status.containerStatuses[0].state.running}'"
+    ]
+}

@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oomkill-app
+  namespace: oncall-bench
+  labels:
+    app: oomkill
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oomkill
+  template:
+    metadata:
+      labels:
+        app: oomkill
+    spec:
+      containers:
+      - name: mem-hog
+        image: polinux/stress
+        command: ["stress"]
+        args: ["--vm", "1", "--vm-bytes", "150M", "--timeout", "1h"] # Tries to use 150MB
+        resources:
+          limits:
+            memory: "64Mi" # Only allows 64MB
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oomkill-svc
+  namespace: oncall-bench
+spec:
+  selector:
+    app: oomkill
+  ports:
+  - port: 80
+    targetPort: 80

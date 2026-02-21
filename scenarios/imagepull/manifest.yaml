@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: imagepull-app
+  namespace: oncall-bench
+  labels:
+    app: imagepull
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: imagepull
+  template:
+    metadata:
+      labels:
+        app: imagepull
+    spec:
+      containers:
+      - name: app
+        image: nginx:nonexistent-tag-12345
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: imagepull-svc
+  namespace: oncall-bench
+spec:
+  selector:
+    app: imagepull
+  ports:
+  - port: 80
+    targetPort: 80

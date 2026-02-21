@@ -1,0 +1,10 @@
+typer[all]
+kubernetes
+openai
+rich
+pyyaml
+pydantic
+google-generativeai
+python-dotenv
+fastapi
+uvicorn

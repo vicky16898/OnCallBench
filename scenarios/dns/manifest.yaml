@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dns-fail-app
+  namespace: oncall-bench
+  labels:
+    app: dns-fail
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dns-fail
+  template:
+    metadata:
+      labels:
+        app: dns-fail
+    spec:
+      initContainers:
+      - name: break-dns
+        image: busybox
+        command: ["sh", "-c", "echo 'nameserver 1.2.3.4' > /mnt/resolv.conf"]
+        volumeMounts:
+        - name: resolv-conf
+          mountPath: /mnt
+      containers:
+      - name: app
+        image: busybox
+        command: ["sh", "-c", "while true; do nslookup google.com || echo 'DNS failed'; sleep 10; done"]
+        volumeMounts:
+        - name: resolv-conf
+          mountPath: /etc/resolv.conf
+          subPath: resolv.conf
+      volumes:
+      - name: resolv-conf
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-fail-svc
+  namespace: oncall-bench
+spec:
+  selector:
+    app: dns-fail
+  ports:
+  - port: 80
+    targetPort: 80

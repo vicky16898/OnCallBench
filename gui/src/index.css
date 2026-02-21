@@ -1,0 +1,235 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --primary: 67 56 202;
+    --primary-foreground: 255 255 255;
+    --background: 241 245 249;
+    --foreground: 15 23 42;
+    --card: 255 255 255;
+    --card-foreground: 15 23 42;
+    --border: 226 232 240;
+    --muted: 241 245 249;
+    --muted-foreground: 71 85 105;
+    --accent: 79 70 229;
+    --success: 16 185 129;
+    --error: 239 68 68;
+    --warning: 245 158 11;
+    --sidebar: 255 255 255;
+    --sidebar-foreground: 51 65 85;
+}
+
+[data-theme='dark'] {
+    --background: 10 10 12;
+    --foreground: 248 250 252;
+    --card: 18 18 22;
+    --card-foreground: 248 250 252;
+    --border: 30 30 35;
+    --muted: 24 24 28;
+    --muted-foreground: 148 163 184;
+    --sidebar: 13 13 15;
+    --sidebar-foreground: 148 163 184;
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+
+    body {
+        @apply bg-background text-foreground;
+        font-feature-settings: "rlig" 1, "calt" 1;
+    }
+}
+
+.font-outfit {
+    font-family: 'Outfit', sans-serif;
+}
+
+.font-inter {
+    font-family: 'Inter', sans-serif;
+}
+
+/* 
+ * Text color is handled by Tailwind utilities (text-foreground, text-muted-foreground, etc.)
+ * and the base body rule: @apply text-foreground.
+ * Do NOT add broad element selectors here — they override Tailwind classes and break dark/light mode.
+ */
+
+/* Enhanced Select Styling - Lens Style */
+select {
+    background-color: rgb(var(--card));
+    color: rgb(var(--foreground));
+    border: 1px solid rgb(var(--border));
+    border-radius: 0.5rem;
+    padding: 0.5rem 2.5rem 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+    background-position: right 0.5rem center;
+    background-repeat: no-repeat;
+    background-size: 1.5em 1.5em;
+}
+
+select:focus {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 2px rgba(67, 56, 202, 0.2);
+}
+
+/* Fix for standard select option visibility */
+select option {
+    background-color: rgb(var(--card));
+    color: rgb(var(--foreground));
+}
+
+/* Dashboard Cards */
+.stats-card {
+    background-color: rgb(var(--card));
+    border: 1px solid rgb(var(--border));
+    padding: 1.5rem;
+    border-radius: 1rem;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+/* White background buttons (e.g. CTA) need dark text */
+button.bg-white,
+button.bg-white * {
+    color: #312e81 !important;
+    /* indigo-900 for good contrast */
+}
+
+button.bg-white:hover {
+    background-color: #f8fafc !important;
+}
+
+/* Animations and Utilities */
+.shimmer {
+    position: relative;
+    overflow: hidden;
+}
+
+.shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg,
+            transparent 0%,
+            rgba(var(--foreground), 0.04) 20%,
+            rgba(var(--foreground), 0.08) 50%,
+            rgba(var(--foreground), 0.04) 80%,
+            transparent 100%);
+    background-size: 200% 100%;
+    animation: shimmer 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+    0% {
+        background-position: 200% 0;
+    }
+
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+/* Float animation for empty state icons */
+@keyframes float {
+
+    0%,
+    100% {
+        transform: translateY(0px);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
+}
+
+.animate-float {
+    animation: float 3s ease-in-out infinite;
+}
+
+/* Subtle glow on interactive card hover */
+.card-glow {
+    transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.card-glow:hover {
+    box-shadow: 0 0 20px -5px rgba(99, 102, 241, 0.15);
+    border-color: rgba(99, 102, 241, 0.2);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(var(--muted-foreground), 0.3);
+    border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(var(--muted-foreground), 0.5);
+}
+
+/* Focus-visible for keyboard accessibility */
+button:focus-visible,
+select:focus-visible,
+a:focus-visible {
+    outline: 2px solid rgb(67 56 202);
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+}
+
+/* Table row hover effect */
+tbody tr {
+    transition: background-color 0.15s ease;
+}
+
+/* Smooth card hover lift */
+.hover-lift {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hover-lift:hover {
+    transform: translateY(-2px);
+}
+
+/* Subtle gradient background for dark mode */
+[data-theme='dark'] body {
+    background: linear-gradient(180deg, rgb(10 10 12) 0%, rgb(14 14 18) 100%);
+}
+
+/* Smooth code block word wrapping */
+code {
+    word-break: break-all;
+}
+
+/* Pulse ring animation for unhealthy status */
+@keyframes ping-slow {
+    0% {
+        transform: scale(1);
+        opacity: 0.8;
+    }
+
+    100% {
+        transform: scale(2);
+        opacity: 0;
+    }
+}
+
+.ping-slow::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    animation: ping-slow 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+    background: inherit;
+}

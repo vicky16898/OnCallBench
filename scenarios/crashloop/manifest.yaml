@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop-app
+  namespace: oncall-bench
+  labels:
+    app: crashloop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crashloop
+  template:
+    metadata:
+      labels:
+        app: crashloop
+    spec:
+      containers:
+      - name: app
+        image: busybox
+        command: ["/bin/sh", "-c", "exit 1"] # Bad command causes CrashLoop
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crashloop-svc
+  namespace: oncall-bench
+spec:
+  selector:
+    app: crashloop
+  ports:
+  - port: 80
+    targetPort: 80

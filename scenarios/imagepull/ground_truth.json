@@ -1,0 +1,14 @@
+{
+    "scenario_id": "imagepull",
+    "name": "ImagePullBackOff due to Invalid Tag",
+    "expected_symptoms": [
+        "Pod status: ImagePullBackOff",
+        "Event: Failed to pull image",
+        "Reason: ErrImagePull"
+    ],
+    "root_cause": "The image tag 'nonexistent-tag-12345' does not exist in the registry.",
+    "fix_steps": "Change the image tag to a valid one, e.g., 'nginx:latest'.",
+    "confirm_commands": [
+        "kubectl get pod -l app=imagepull -n oncall-bench -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}'"
+    ]
+}

@@ -1,0 +1,13 @@
+{
+    "scenario_id": "readiness",
+    "name": "Readiness Probe Failure",
+    "expected_symptoms": [
+        "Pod status: Running but not Ready (Ready: 0/1)",
+        "Event: Readiness probe failed: connection refused"
+    ],
+    "root_cause": "The readiness probe is configured to check port 8080, but the application is listening on port 80.",
+    "fix_steps": "Update the readinessProbe.httpGet.port to 80 in the deployment manifest.",
+    "confirm_commands": [
+        "kubectl get pod -l app=readiness -n oncall-bench -o jsonpath='{.items[0].status.containerStatuses[0].ready}'"
+    ]
+}

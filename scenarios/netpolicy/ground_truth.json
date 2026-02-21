@@ -1,0 +1,14 @@
+{
+    "scenario_id": "netpolicy",
+    "name": "NetworkPolicy Egress Blocked",
+    "expected_symptoms": [
+        "Logs show 'Egress blocked'",
+        "wget timeouts",
+        "NetworkPolicy 'deny-egress' exists in the namespace"
+    ],
+    "root_cause": "A NetworkPolicy named 'deny-egress' is applied to the pod which has an empty egress rule list, effectively blocking all outgoing traffic.",
+    "fix_steps": "Delete the NetworkPolicy or update it to allow egress to required destinations.",
+    "confirm_commands": [
+        "kubectl get networkpolicy deny-egress -n oncall-bench"
+    ]
+}

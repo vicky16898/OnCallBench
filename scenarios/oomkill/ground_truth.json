@@ -1,0 +1,13 @@
+{
+    "scenario_id": "oomkill",
+    "name": "OOMKilled due to Memory Limits",
+    "expected_symptoms": [
+        "Pod status: OOMKilled",
+        "Last State: Terminated with reason OOMKilled"
+    ],
+    "root_cause": "Container is attempting to use 150Mi of memory while the limit is set to 64Mi.",
+    "fix_steps": "Increase the memory limit in the deployment resources section to at least 200Mi.",
+    "confirm_commands": [
+        "kubectl get pod -l app=oomkill -n oncall-bench -o jsonpath='{.items[0].status.containerStatuses[0].lastState.terminated.reason}'"
+    ]
+}

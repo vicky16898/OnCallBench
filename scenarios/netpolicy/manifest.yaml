@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netpolicy-app
+  namespace: oncall-bench
+  labels:
+    app: netpolicy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: netpolicy
+  template:
+    metadata:
+      labels:
+        app: netpolicy
+    spec:
+      containers:
+      - name: app
+        image: busybox
+        command: ["sh", "-c", "while true; do wget -q -O- http://google.com --timeout 2 || echo 'Egress blocked'; sleep 10; done"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-egress
+  namespace: oncall-bench
+spec:
+  podSelector:
+    matchLabels:
+      app: netpolicy
+  policyTypes:
+  - Egress
+  egress: [] # Denies all egress
