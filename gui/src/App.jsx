@@ -44,6 +44,7 @@ function App() {
     const [benchmarks, setBenchmarks] = useState([]);
     const [refreshing, setRefreshing] = useState(false);
     const [statsDetail, setStatsDetail] = useState(null);
+    const [lastRefreshed, setLastRefreshed] = useState(null);
 
     useEffect(() => {
         document.documentElement.setAttribute('data-theme', theme);
@@ -144,6 +145,7 @@ function App() {
         try {
             const res = await api.get('/stats', { params: { namespace: ns } });
             setStats(res.data);
+            setLastRefreshed(new Date());
         } catch (err) {
             console.error("Stats fetch failed", err);
             setStatsError(err.message);
@@ -237,6 +239,12 @@ function App() {
                     </div>
 
                     <div className="flex items-center gap-6">
+                        {lastRefreshed && (
+                            <span className="text-[10px] text-muted-foreground hidden md:flex items-center gap-1">
+                                <Clock size={10} />
+                                {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                        )}
                         <div className="flex bg-muted rounded-full p-1 border border-border">
                             <span className={`px-3 py-1 text-[10px] font-bold flex items-center gap-1.5 ${stats && stats.unhealthy_pods > 0 ? 'text-warning' : 'text-success'}`}>
                                 <div className={`w-2 h-2 rounded-full animate-pulse ${stats && stats.unhealthy_pods > 0 ? 'bg-warning' : 'bg-success'}`} />
