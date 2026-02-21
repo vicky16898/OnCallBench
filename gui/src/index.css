@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+    scroll-behavior: smooth;
+}
+
+[data-theme='dark'] ::selection {
+    background: rgba(99, 102, 241, 0.3);
+}
+
 :root {
     --primary: 67 56 202;
     --primary-foreground: 255 255 255;
