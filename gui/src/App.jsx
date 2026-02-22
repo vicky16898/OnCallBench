@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:8000';
 const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
 
 function App() {

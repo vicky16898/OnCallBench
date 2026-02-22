@@ -1,0 +1,128 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: oncall-bench
+
+---
+# 1. RBAC - Give the app permissions to manage the cluster
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oncall-admin
+  namespace: oncall-bench
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oncall-admin-role
+rules:
+- apiGroups: ["", "apps", "networking.k8s.io", "batch"]
+  resources: ["pods", "pods/log", "events", "namespaces", "deployments", "services", "networkpolicies", "jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oncall-admin-binding
+subjects:
+- kind: ServiceAccount
+  name: oncall-admin
+  namespace: oncall-bench
+roleRef:
+  kind: ClusterRole
+  name: oncall-admin-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# 2. Config - Add your Google API Key here
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oncall-secrets
+  namespace: oncall-bench
+type: Opaque
+stringData:
+  GOOGLE_API_KEY: "REPLACE_WITH_YOUR_KEY"
+
+---
+# 3. Backend - The FastAPI engine
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oncall-backend
+  namespace: oncall-bench
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oncall-backend
+  template:
+    metadata:
+      labels:
+        app: oncall-backend
+    spec:
+      serviceAccountName: oncall-admin
+      containers:
+      - name: backend
+        image: oncall-backend:latest  # Use 'minikube image load' or your registry
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+        env:
+        - name: GOOGLE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: oncall-secrets
+              key: GOOGLE_API_KEY
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oncall-backend
+  namespace: oncall-bench
+spec:
+  selector:
+    app: oncall-backend
+  ports:
+  - port: 8000
+    targetPort: 8000
+
+---
+# 4. Frontend - The React UI (Nginx)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oncall-frontend
+  namespace: oncall-bench
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oncall-frontend
+  template:
+    metadata:
+      labels:
+        app: oncall-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: oncall-frontend:latest # Use 'minikube image load' or your registry
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oncall-frontend
+  namespace: oncall-bench
+spec:
+  type: NodePort # Easier for Minikube
+  selector:
+    app: oncall-frontend
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 30080
