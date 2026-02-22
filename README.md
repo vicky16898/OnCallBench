@@ -59,52 +59,87 @@ Think of it as **"LeetCode for SRE AI agents."**
 
 ---
 
-## 🚀 Quick Start
+---
+
+## 🚀 Getting Started
 
 ### Prerequisites
+- A running Kubernetes cluster (Minikube, EKS, GKE, etc.)
+- Google Gemini API key ([get one for free here](https://aistudio.google.com/apikey))
+- Docker installed
 
-- Python 3.10+
-- Node.js 18+
-- A running Kubernetes cluster (minikube, kind, EKS, GKE, etc.)
-- `kubectl` configured and pointing to your cluster
-- Google AI API key ([get one here](https://aistudio.google.com/apikey))
+---
 
-### 1. Clone & Setup
+### 🎡 In-Cluster Deployment (Recommended)
 
+Run OnCallBench natively inside your cluster for low-latency diagnostics and direct control plane access.
+
+#### 1. Build & Load Images (Minikube)
+If using Minikube, load the images directly into the cluster's internal registry:
+
+```bash
+# Build Backend
+docker build -t oncall-backend:latest .
+minikube image load oncall-backend:latest
+
+# Build Frontend
+cd gui
+docker build -t oncall-frontend:latest .
+minikube image load oncall-frontend:latest
+cd ..
+```
+
+#### 2. Configure API Key
+Open `k8s/deploy.yaml` and paste your Gemini API key in the `Secret` section:
+
+```yaml
+# k8s/deploy.yaml
+stringData:
+  GOOGLE_API_KEY: "YOUR_AIZA_KEY_HERE" # <--- Paste key here
+```
+
+#### 3. Deploy to Cluster
+```bash
+kubectl apply -f k8s/deploy.yaml
+```
+
+#### 4. Access the Dashboard
+Since the app uses a `NodePort`, use the Minikube tunnel to reach it:
+```bash
+minikube service oncall-frontend -n oncall-bench
+```
+
+---
+
+### 💻 Local Development
+
+Use this mode if you want to run the code on your host machine while connecting to a remote cluster.
+
+#### 1. Clone & Setup
 ```bash
 git clone https://github.com/YOUR_USERNAME/OnCallBench.git
 cd OnCallBench
 ```
 
-### 2. Backend
-
+#### 2. Run Backend
 ```bash
-# Create virtual environment
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install dependencies
 pip install -r requirements.txt
 
-# Configure API key
 cp .env.example .env
 # Edit .env and add your GOOGLE_API_KEY
 
-# Start the API server
 python src/api.py
 ```
 
-### 3. Frontend
-
+#### 3. Run Frontend
 ```bash
 cd gui
 npm install
 npm run dev
 ```
-
-### 4. Open the Dashboard
-
-Navigate to `http://localhost:5173` — the dashboard will auto-connect to your cluster.
+Navigate to `http://localhost:5173`.
 
 ---
 
