@@ -513,18 +513,16 @@ function App() {
                                 <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
                                     <table className="w-full text-left border-collapse">
                                         <thead>
-                                            <tr className="text-[11px] uppercase tracking-widest text-muted-foreground bg-muted/50 border-b border-border">
-                                                <th className="py-4 pl-6 font-bold">Pod Name</th>
-                                                <th className="py-4 font-bold text-center">Status</th>
-                                                <th className="py-4 font-bold text-center">Restarts</th>
+                                            <tr className="text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border">
+                                                <th className="py-4 pl-6 font-bold">Pod Identifier</th>
+                                                <th className="py-4 font-bold">Health Status</th>
+                                                <th className="py-4 font-bold">Restarts</th>
                                                 <th className="py-4 font-bold">Created At</th>
                                                 <th className="py-4 pr-6 text-right">Utility</th>
                                             </tr>
                                         </thead>
                                         <tbody className="text-sm">
-                                            {pods.length === 0 ? (
-                                                <tr><td colSpan="5" className="py-20 text-center text-muted-foreground italic">No pods found in {selectedNS}. Switch namespace or inject a scenario.</td></tr>
-                                            ) : pods.map((pod, podIdx) => (
+                                            {pods.length > 0 ? pods.map((pod, podIdx) => (
                                                 <motion.tr
                                                     key={pod.name}
                                                     initial={{ opacity: 0, x: -30 }}
@@ -538,27 +536,48 @@ function App() {
                                                             <div className={`p-2 rounded-lg ${pod.is_healthy ? 'bg-indigo-500/10 text-indigo-600' : 'bg-red-500/10 text-red-600'}`}>
                                                                 <Server size={18} />
                                                             </div>
-                                                            <span className="font-semibold text-foreground group-hover:text-indigo-600 transition-colors uppercase tracking-tight text-xs">{pod.name}</span>
+                                                            <div>
+                                                                <div className="font-bold text-foreground text-sm">{pod.name}</div>
+                                                                <div className="text-[10px] text-muted-foreground font-mono mt-0.5">{selectedNS}</div>
+                                                            </div>
                                                         </div>
                                                     </td>
                                                     <td className="py-5">
-                                                        <div className="flex justify-center">
-                                                            <span className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold leading-none ${pod.is_healthy ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>
-                                                                <div className={`w-1.5 h-1.5 rounded-full ${pod.is_healthy ? 'bg-success' : 'bg-error animate-pulse'}`} />
-                                                                {pod.status}
-                                                            </span>
+                                                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-tight ${pod.is_healthy ? 'bg-success/10 text-success' : 'bg-red-500/10 text-red-600'
+                                                            }`}>
+                                                            {pod.status}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-5">
+                                                        <div className={`flex items-center gap-1.5 font-bold ${pod.restarts > 5 ? 'text-red-500' : 'text-foreground'}`}>
+                                                            {pod.restarts}
                                                         </div>
                                                     </td>
-                                                    <td className="py-5 text-center font-mono text-xs text-muted-foreground">{pod.restarts}</td>
-                                                    <td className="py-5 text-xs text-muted-foreground">{new Date(pod.age).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                                                    <td className="py-5 text-muted-foreground tracking-tight">
+                                                        {new Date(pod.age).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                    </td>
                                                     <td className="py-5 pr-6 text-right">
-                                                        <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                            <span className="text-[10px] font-bold text-indigo-600">INSPECT</span>
-                                                            <ChevronRight size={14} className="text-indigo-600" />
-                                                        </div>
+                                                        <button className="p-2 bg-card border border-border rounded-lg text-muted-foreground group-hover:text-indigo-600 group-hover:border-indigo-500/20 transition-all">
+                                                            <ChevronRight size={16} />
+                                                        </button>
                                                     </td>
                                                 </motion.tr>
-                                            ))}
+                                            )) : (
+                                                <tr>
+                                                    <td colSpan="5">
+                                                        <div className="py-32 flex flex-col items-center justify-center text-center px-6">
+                                                            <div className="w-16 h-16 bg-muted/50 rounded-full flex items-center justify-center mb-4">
+                                                                <LayoutGrid size={28} className="text-muted-foreground" />
+                                                            </div>
+                                                            <h3 className="text-lg font-bold text-foreground mb-1">Namespace is Empty</h3>
+                                                            <p className="text-sm text-muted-foreground max-w-xs mb-6">No pods found in <span className="text-indigo-600 font-mono font-bold">{selectedNS}</span>. Switch namespace or inject an incident.</p>
+                                                            <button onClick={() => setActiveTab('scenarios')} className="px-6 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-500/20 hover:scale-105 transition-all active:scale-95">
+                                                                Explore Scenarios
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
                                         </tbody>
                                     </table>
                                 </div>
