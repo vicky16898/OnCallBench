@@ -24,16 +24,27 @@ app.add_middleware(
 )
 
 # Initialize K8s client
+K8S_MODE = "kubeconfig"
 try:
     config.load_kube_config()
 except Exception:
     try:
         config.load_incluster_config()
+        K8S_MODE = "in-cluster"
     except Exception:
+        K8S_MODE = "error"
         print("Warning: Could not load K8s config. Ensure you are in a K8s context.")
 
 v1 = client.CoreV1Api()
 apps_v1 = client.AppsV1Api()
+
+@app.get("/info")
+async def get_info():
+    return {
+        "mode": K8S_MODE,
+        "api_ready": GOOGLE_API_KEY is not None,
+        "version": "1.0.0"
+    }
 
 # Gemini Config
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")

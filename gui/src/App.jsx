@@ -46,6 +46,7 @@ function App() {
     const [statsDetail, setStatsDetail] = useState(null);
     const [lastRefreshed, setLastRefreshed] = useState(null);
     const [copiedCmd, setCopiedCmd] = useState(null);
+    const [appInfo, setAppInfo] = useState(null);
 
     useEffect(() => {
         document.documentElement.setAttribute('data-theme', theme);
@@ -124,6 +125,14 @@ function App() {
             setBenchmarks(benchRes.data || []);
         } catch (err) {
             console.error("Benchmarks fetch failed");
+        }
+
+        // 4. Fetch App Info
+        try {
+            const infoRes = await api.get('/info');
+            setAppInfo(infoRes.data);
+        } catch (err) {
+            console.error("App info fetch failed");
         }
 
         // 4. Stats is handled by the useEffect on selectedNS
@@ -228,6 +237,22 @@ function App() {
                         </button>
                     </div>
                 </div>
+
+                {appInfo && (
+                    <div className="p-4 border-t border-border mt-auto">
+                        <div className="bg-muted/50 rounded-xl p-3 border border-border/50">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-tighter">Connection</span>
+                                <div className={`w-1.5 h-1.5 rounded-full ${appInfo.mode === 'in-cluster' ? 'bg-success' : 'bg-indigo-500'}`} />
+                            </div>
+                            <div className="text-[11px] font-bold text-foreground truncate">{appInfo.mode === 'in-cluster' ? 'Native Cluster' : 'Local Kubeconfig'}</div>
+                            <div className="text-[9px] text-muted-foreground mt-1 flex items-center gap-1">
+                                {appInfo.api_ready ? <span className="text-success font-bold text-[8px]">●</span> : <span className="text-error font-bold text-[8px]">○</span>}
+                                API Ready · v{appInfo.version}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </aside>
 
             {/* Main Content */}
