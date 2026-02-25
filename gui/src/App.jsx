@@ -18,9 +18,19 @@ import {
     Cpu,
     Server,
     Clock,
-    ArrowUpRight
+    ArrowUpRight,
+    Play,
+    LayoutGrid,
+    Box,
+    Globe,
+    Network,
+    GitBranch
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import WorkloadsTab from './components/WorkloadsTab';
+import EventsTab from './components/EventsTab';
+import NetworkingTab from './components/NetworkingTab';
+import TopologyTab from './components/TopologyTab';
 
 const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:8000';
 const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
@@ -29,7 +39,7 @@ function App() {
     const [activeTab, setActiveTab] = useState('dashboard');
     const [theme, setTheme] = useState('light');
     const [namespaces, setNamespaces] = useState([]);
-    const [selectedNS, setSelectedNS] = useState('default');
+    const [selectedNS, setSelectedNS] = useState(null);
     const [pods, setPods] = useState([]);
     const [scenarios, setScenarios] = useState([]);
     const [stats, setStats] = useState(null);
@@ -47,6 +57,19 @@ function App() {
     const [lastRefreshed, setLastRefreshed] = useState(null);
     const [copiedCmd, setCopiedCmd] = useState(null);
     const [appInfo, setAppInfo] = useState(null);
+    const [executingCmd, setExecutingCmd] = useState(null);
+    const [executionResults, setExecutionResults] = useState({});
+    const pollGeneration = useRef(0);
+
+    // Dashboard overview data for new tabs
+    const [dashDeployments, setDashDeployments] = useState([]);
+    const [dashStatefulsets, setDashStatefulsets] = useState([]);
+    const [dashDaemonsets, setDashDaemonsets] = useState([]);
+    const [dashEvents, setDashEvents] = useState([]);
+    const [dashServices, setDashServices] = useState([]);
+    const [dashIngresses, setDashIngresses] = useState([]);
+    const [dashNetpolicies, setDashNetpolicies] = useState([]);
+    const [dashOverviewLoading, setDashOverviewLoading] = useState(false);
 
     useEffect(() => {
         document.documentElement.setAttribute('data-theme', theme);
@@ -60,6 +83,7 @@ function App() {
         if (selectedNS) {
             fetchPods(selectedNS);
             handleRefreshStats(selectedNS);
+            fetchDashboardOverview(selectedNS);
         }
     }, [selectedNS]);
 
@@ -68,7 +92,7 @@ function App() {
         const handleKeyDown = (e) => {
             if (e.key === 'Escape') {
                 if (statsDetail) setStatsDetail(null);
-                else if (selectedPod) setSelectedPod(null);
+                else if (selectedPod) closeInspector();
             }
         };
         const handleClickOutside = (e) => {
@@ -81,6 +105,35 @@ function App() {
         return () => { window.removeEventListener('keydown', handleKeyDown); document.removeEventListener('mousedown', handleClickOutside); };
     }, [selectedPod, statsDetail]);
 
+    // Fetch dashboard overview data for new tabs
+    const fetchDashboardOverview = useCallback(async (ns) => {
+        const namespace = ns || selectedNS;
+        if (!namespace) return;
+        setDashOverviewLoading(true);
+        try {
+            const [depRes, ssRes, dsRes, evtRes, svcRes, ingRes, npRes] = await Promise.allSettled([
+                api.get(`/namespaces/${namespace}/deployments`),
+                api.get(`/namespaces/${namespace}/statefulsets`),
+                api.get(`/namespaces/${namespace}/daemonsets`),
+                api.get(`/namespaces/${namespace}/events`),
+                api.get(`/namespaces/${namespace}/services`),
+                api.get(`/namespaces/${namespace}/ingresses`),
+                api.get(`/namespaces/${namespace}/networkpolicies`),
+            ]);
+            if (depRes.status === 'fulfilled') setDashDeployments(depRes.value.data || []);
+            if (ssRes.status === 'fulfilled') setDashStatefulsets(ssRes.value.data || []);
+            if (dsRes.status === 'fulfilled') setDashDaemonsets(dsRes.value.data || []);
+            if (evtRes.status === 'fulfilled') setDashEvents(evtRes.value.data || []);
+            if (svcRes.status === 'fulfilled') setDashServices(svcRes.value.data || []);
+            if (ingRes.status === 'fulfilled') setDashIngresses(ingRes.value.data || []);
+            if (npRes.status === 'fulfilled') setDashNetpolicies(npRes.value.data || []);
+        } catch (err) {
+            console.error('Dashboard overview fetch error', err);
+        } finally {
+            setDashOverviewLoading(false);
+        }
+    }, [api, selectedNS]);
+
     // Auto-refresh dashboard every 30s
     const autoRefreshRef = useRef(null);
     useEffect(() => {
@@ -89,10 +142,11 @@ function App() {
                 setStatsDetail(null); // close stale popover before refresh
                 fetchPods(selectedNS);
                 handleRefreshStats(selectedNS);
+                fetchDashboardOverview(selectedNS);
             }, 30000);
         }
         return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
-    }, [activeTab, selectedNS]);
+    }, [activeTab, selectedNS, fetchDashboardOverview]);
 
     const fetchInitialData = async () => {
         // 1. Fetch Namespaces
@@ -101,14 +155,17 @@ function App() {
             const nsData = nsRes.data || [];
             setNamespaces(nsData);
 
-            // Smart namespace selection
+            // Smart namespace selection – always set on initial load
             if (nsData.includes('oncall-bench')) {
                 setSelectedNS('oncall-bench');
-            } else if (nsData.length > 0 && selectedNS === 'default' && !nsData.includes('default')) {
+            } else if (nsData.length > 0) {
                 setSelectedNS(nsData[0]);
+            } else {
+                setSelectedNS('default');
             }
         } catch (err) {
             console.error("Namespaces fetch failed");
+            setSelectedNS('default');
         }
 
         // 2. Fetch Scenarios
@@ -142,10 +199,13 @@ function App() {
         try {
             console.log(`Fetching pods for namespace: ${ns}`);
             const res = await api.get(`/namespaces/${ns}/pods`);
-            setPods(res.data || []);
+            const podData = res.data || [];
+            setPods(podData);
+            return podData;
         } catch (err) {
             console.error("Pods fetch failed", err);
             setPods([]);
+            return [];
         }
     };
 
@@ -170,10 +230,15 @@ function App() {
         try {
             const res = await api.post(`/inject/${id}`);
             setInjectResult({ type: 'success', message: res.data?.message || `Scenario ${id} injected successfully` });
-            setTimeout(() => {
-                fetchPods(selectedNS);
-                handleRefreshStats();
-            }, 3000);
+            // Poll multiple times to allow K8s to reconcile pod state
+            // (a single delayed fetch often misses transitional states like ImagePull)
+            const pollIntervals = [2000, 5000, 10000];
+            pollIntervals.forEach((delay) => {
+                setTimeout(() => {
+                    fetchPods(selectedNS);
+                    handleRefreshStats();
+                }, delay);
+            });
         } catch (err) {
             console.error(err);
             setInjectResult({ type: 'error', message: err.response?.data?.detail || err.message || 'Injection failed' });
@@ -195,6 +260,65 @@ function App() {
         finally { setLoading(false); }
     };
 
+    // Close the AI Inspector drawer and invalidate any in-flight poll callbacks
+    const closeInspector = useCallback(() => {
+        pollGeneration.current += 1;
+        setSelectedPod(null);
+        setDiagnosis(null);
+        setDiagnosisError(null);
+        setExecutionResults({});
+    }, []);
+
+    const handleExecuteCommand = async (command, idx) => {
+        setExecutingCmd(idx);
+        const oldPodName = selectedPod?.name;
+        // Keep track of the prefix (e.g., 'crashloop-app-') to find the replacement pod
+        const podPrefix = oldPodName?.split('-').slice(0, -2).join('-');
+
+        // Bump generation so any previous poll callbacks skip drawer-specific logic
+        const currentGen = ++pollGeneration.current;
+
+        try {
+            const res = await api.post('/execute', { command });
+            setExecutionResults(prev => ({ ...prev, [idx]: res.data }));
+
+            // Poll multiple times to let K8s fully reconcile after the fix.
+            // Pods & stats are ALWAYS refreshed (never cancelled), but
+            // drawer-specific updates (selecting the new pod, re-diagnosing)
+            // only run if the generation is still current (drawer wasn't closed).
+            const pollDelays = [3000, 6000, 10000, 15000];
+            pollDelays.forEach((delay, pollIdx) => {
+                setTimeout(async () => {
+                    // Always refresh pods & stats so the table stays current
+                    const refreshedPods = await fetchPods(selectedNS);
+                    await handleRefreshStats();
+
+                    // Skip drawer-specific logic if the drawer was closed
+                    // or a newer command started (generation mismatch)
+                    if (pollGeneration.current !== currentGen) return;
+
+                    const newPod = refreshedPods?.find(p => p.name.startsWith(podPrefix || '')) || refreshedPods?.[0];
+
+                    if (newPod) {
+                        setSelectedPod(newPod);
+                        if (pollIdx === pollDelays.length - 1) {
+                            runDiagnosis(newPod.name);
+                        }
+                    } else {
+                        setSelectedPod(null);
+                    }
+                }, delay);
+            });
+        } catch (err) {
+            setExecutionResults(prev => ({
+                ...prev,
+                [idx]: { success: false, stderr: err.response?.data?.detail || err.message }
+            }));
+        } finally {
+            setExecutingCmd(null);
+        }
+    };
+
     const toggleTheme = () => setTheme(theme === 'light' ? 'dark' : 'light');
 
     return (
@@ -208,9 +332,13 @@ function App() {
                     <span className="hidden lg:inline font-bold font-outfit text-xl tracking-tight text-foreground">OnCallBench</span>
                 </div>
 
-                <nav className="flex-1 px-3 space-y-1 py-4">
+                <nav className="flex-1 px-3 space-y-1 py-4 overflow-y-auto custom-scrollbar min-h-0">
                     <NavItem icon={<LayoutDashboard size={20} />} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+                    <NavItem icon={<Box size={20} />} label="Workloads" active={activeTab === 'workloads'} onClick={() => setActiveTab('workloads')} />
                     <NavItem icon={<Activity size={20} />} label="Pods" active={activeTab === 'pods'} onClick={() => setActiveTab('pods')} badge={pods.length > 0 ? pods.length : null} />
+                    <NavItem icon={<Clock size={20} />} label="Events" active={activeTab === 'events'} onClick={() => setActiveTab('events')} />
+                    <NavItem icon={<Globe size={20} />} label="Networking" active={activeTab === 'networking'} onClick={() => setActiveTab('networking')} />
+                    <NavItem icon={<GitBranch size={20} />} label="Topology" active={activeTab === 'topology'} onClick={() => setActiveTab('topology')} />
                     <NavItem icon={<Zap size={20} />} label="Scenarios" active={activeTab === 'scenarios'} onClick={() => setActiveTab('scenarios')} badge={scenarios.length > 0 ? scenarios.length : null} />
                     <NavItem icon={<History size={20} />} label="Benchmarks" active={activeTab === 'benchmarks'} onClick={() => setActiveTab('benchmarks')} badge={benchmarks.length > 0 ? benchmarks.length : null} />
                 </nav>
@@ -261,7 +389,7 @@ function App() {
                     <div className="flex items-center gap-3">
                         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{activeTab}</h2>
                         <ChevronRight size={14} className="text-muted-foreground/40" />
-                        <span className="text-sm font-medium text-foreground">{selectedNS}</span>
+                        <span className="text-sm font-medium text-foreground">{selectedNS || 'Loading...'}</span>
                     </div>
 
                     <div className="flex items-center gap-6">
@@ -463,36 +591,312 @@ function App() {
                                             ))}
                                         </div>
 
+                                        {/* ── New Tabs Overview Section ── */}
+                                        <div className="space-y-4">
+                                            <h3 className="font-outfit text-lg font-bold text-foreground">Cluster Resources Overview</h3>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                                {/* Workloads Widget */}
+                                                <motion.div
+                                                    initial={{ opacity: 0, y: 20 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    transition={{ delay: 0.1 }}
+                                                    className="bg-card rounded-2xl border border-border p-5 hover:shadow-md transition-all cursor-pointer group"
+                                                    onClick={() => setActiveTab('workloads')}
+                                                >
+                                                    <div className="flex items-center justify-between mb-4">
+                                                        <div className="p-2 bg-blue-500/10 rounded-xl"><Box className="text-blue-500" size={20} /></div>
+                                                        <ArrowUpRight size={16} className="text-muted-foreground group-hover:text-blue-500 transition-colors" />
+                                                    </div>
+                                                    <h4 className="font-outfit font-bold text-foreground mb-1">Workloads</h4>
+                                                    {dashOverviewLoading ? (
+                                                        <div className="h-10 bg-muted rounded-lg shimmer" />
+                                                    ) : (
+                                                        <div className="space-y-1.5">
+                                                            <div className="flex items-center justify-between text-xs">
+                                                                <span className="text-muted-foreground">Deployments</span>
+                                                                <span className="font-bold text-foreground">{dashDeployments.length}</span>
+                                                            </div>
+                                                            <div className="flex items-center justify-between text-xs">
+                                                                <span className="text-muted-foreground">StatefulSets</span>
+                                                                <span className="font-bold text-foreground">{dashStatefulsets.length}</span>
+                                                            </div>
+                                                            <div className="flex items-center justify-between text-xs">
+                                                                <span className="text-muted-foreground">DaemonSets</span>
+                                                                <span className="font-bold text-foreground">{dashDaemonsets.length}</span>
+                                                            </div>
+                                                            {(() => {
+                                                                const allWL = [...dashDeployments, ...dashStatefulsets, ...dashDaemonsets];
+                                                                const degraded = allWL.filter(w => w.ready_replicas < w.replicas).length;
+                                                                return degraded > 0 ? (
+                                                                    <div className="mt-2 px-2 py-1.5 bg-warning/10 rounded-lg text-[10px] font-bold text-warning flex items-center gap-1">
+                                                                        <AlertCircle size={12} /> {degraded} degraded
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="mt-2 px-2 py-1.5 bg-success/10 rounded-lg text-[10px] font-bold text-success flex items-center gap-1">
+                                                                        <CheckCircle2 size={12} /> All healthy
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                        </div>
+                                                    )}
+                                                </motion.div>
+
+                                                {/* Events Widget */}
+                                                <motion.div
+                                                    initial={{ opacity: 0, y: 20 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    transition={{ delay: 0.15 }}
+                                                    className="bg-card rounded-2xl border border-border p-5 hover:shadow-md transition-all cursor-pointer group"
+                                                    onClick={() => setActiveTab('events')}
+                                                >
+                                                    <div className="flex items-center justify-between mb-4">
+                                                        <div className="p-2 bg-amber-500/10 rounded-xl"><Clock className="text-amber-500" size={20} /></div>
+                                                        <ArrowUpRight size={16} className="text-muted-foreground group-hover:text-amber-500 transition-colors" />
+                                                    </div>
+                                                    <h4 className="font-outfit font-bold text-foreground mb-1">Events</h4>
+                                                    {dashOverviewLoading ? (
+                                                        <div className="h-10 bg-muted rounded-lg shimmer" />
+                                                    ) : (
+                                                        <div className="space-y-1.5">
+                                                            <div className="flex items-center justify-between text-xs">
+                                                                <span className="text-muted-foreground">Total Events</span>
+                                                                <span className="font-bold text-foreground">{dashEvents.length}</span>
+                                                            </div>
+                                                            {(() => {
+                                                                const warnings = dashEvents.filter(e => e.type === 'Warning');
+                                                                const normals = dashEvents.filter(e => e.type === 'Normal');
+                                                                return (
+                                                                    <>
+                                                                        <div className="flex items-center justify-between text-xs">
+                                                                            <span className="text-muted-foreground">Normal</span>
+                                                                            <span className="font-bold text-success">{normals.length}</span>
+                                                                        </div>
+                                                                        <div className="flex items-center justify-between text-xs">
+                                                                            <span className="text-muted-foreground">Warnings</span>
+                                                                            <span className={`font-bold ${warnings.length > 0 ? 'text-warning' : 'text-foreground'}`}>{warnings.length}</span>
+                                                                        </div>
+                                                                        {warnings.length > 0 ? (
+                                                                            <div className="mt-2 px-2 py-1.5 bg-warning/10 rounded-lg text-[10px] font-bold text-warning flex items-center gap-1">
+                                                                                <AlertCircle size={12} /> {warnings.length} warning{warnings.length > 1 ? 's' : ''} detected
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div className="mt-2 px-2 py-1.5 bg-success/10 rounded-lg text-[10px] font-bold text-success flex items-center gap-1">
+                                                                                <CheckCircle2 size={12} /> No warnings
+                                                                            </div>
+                                                                        )}
+                                                                    </>
+                                                                );
+                                                            })()}
+                                                        </div>
+                                                    )}
+                                                </motion.div>
+
+                                                {/* Networking Widget */}
+                                                <motion.div
+                                                    initial={{ opacity: 0, y: 20 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    transition={{ delay: 0.2 }}
+                                                    className="bg-card rounded-2xl border border-border p-5 hover:shadow-md transition-all cursor-pointer group"
+                                                    onClick={() => setActiveTab('networking')}
+                                                >
+                                                    <div className="flex items-center justify-between mb-4">
+                                                        <div className="p-2 bg-emerald-500/10 rounded-xl"><Globe className="text-emerald-500" size={20} /></div>
+                                                        <ArrowUpRight size={16} className="text-muted-foreground group-hover:text-emerald-500 transition-colors" />
+                                                    </div>
+                                                    <h4 className="font-outfit font-bold text-foreground mb-1">Networking</h4>
+                                                    {dashOverviewLoading ? (
+                                                        <div className="h-10 bg-muted rounded-lg shimmer" />
+                                                    ) : (
+                                                        <div className="space-y-1.5">
+                                                            <div className="flex items-center justify-between text-xs">
+                                                                <span className="text-muted-foreground">Services</span>
+                                                                <span className="font-bold text-foreground">{dashServices.length}</span>
+                                                            </div>
+                                                            <div className="flex items-center justify-between text-xs">
+                                                                <span className="text-muted-foreground">Ingresses</span>
+                                                                <span className="font-bold text-foreground">{dashIngresses.length}</span>
+                                                            </div>
+                                                            <div className="flex items-center justify-between text-xs">
+                                                                <span className="text-muted-foreground">Net Policies</span>
+                                                                <span className="font-bold text-foreground">{dashNetpolicies.length}</span>
+                                                            </div>
+                                                            {(() => {
+                                                                const nodeportSvcs = dashServices.filter(s => s.type === 'NodePort' || s.type === 'LoadBalancer');
+                                                                return nodeportSvcs.length > 0 ? (
+                                                                    <div className="mt-2 px-2 py-1.5 bg-blue-500/10 rounded-lg text-[10px] font-bold text-blue-500 flex items-center gap-1">
+                                                                        <Globe size={12} /> {nodeportSvcs.length} externally exposed
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="mt-2 px-2 py-1.5 bg-muted rounded-lg text-[10px] font-bold text-muted-foreground flex items-center gap-1">
+                                                                        All internal (ClusterIP)
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                        </div>
+                                                    )}
+                                                </motion.div>
+
+                                                {/* Topology Widget */}
+                                                <motion.div
+                                                    initial={{ opacity: 0, y: 20 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    transition={{ delay: 0.25 }}
+                                                    className="bg-card rounded-2xl border border-border p-5 hover:shadow-md transition-all cursor-pointer group"
+                                                    onClick={() => setActiveTab('topology')}
+                                                >
+                                                    <div className="flex items-center justify-between mb-4">
+                                                        <div className="p-2 bg-violet-500/10 rounded-xl"><GitBranch className="text-violet-500" size={20} /></div>
+                                                        <ArrowUpRight size={16} className="text-muted-foreground group-hover:text-violet-500 transition-colors" />
+                                                    </div>
+                                                    <h4 className="font-outfit font-bold text-foreground mb-1">Topology</h4>
+                                                    {dashOverviewLoading ? (
+                                                        <div className="h-10 bg-muted rounded-lg shimmer" />
+                                                    ) : (
+                                                        <div className="space-y-1.5">
+                                                            {(() => {
+                                                                const totalResources = dashDeployments.length + dashStatefulsets.length + dashDaemonsets.length + pods.length + dashServices.length;
+                                                                return (
+                                                                    <>
+                                                                        <div className="flex items-center justify-between text-xs">
+                                                                            <span className="text-muted-foreground">Total Resources</span>
+                                                                            <span className="font-bold text-foreground">{totalResources}</span>
+                                                                        </div>
+                                                                        <div className="flex items-center justify-between text-xs">
+                                                                            <span className="text-muted-foreground">Workloads</span>
+                                                                            <span className="font-bold text-foreground">{dashDeployments.length + dashStatefulsets.length + dashDaemonsets.length}</span>
+                                                                        </div>
+                                                                        <div className="flex items-center justify-between text-xs">
+                                                                            <span className="text-muted-foreground">Connections</span>
+                                                                            <span className="font-bold text-foreground">{dashServices.length > 0 ? `~${dashServices.length * 2}` : '0'}</span>
+                                                                        </div>
+                                                                        <div className="mt-2 px-2 py-1.5 bg-violet-500/10 rounded-lg text-[10px] font-bold text-violet-500 flex items-center gap-1">
+                                                                            <GitBranch size={12} /> View dependency graph
+                                                                        </div>
+                                                                    </>
+                                                                );
+                                                            })()}
+                                                        </div>
+                                                    )}
+                                                </motion.div>
+                                            </div>
+                                        </div>
+
                                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                                             <div className="lg:col-span-2 bg-card rounded-2xl border border-border p-6 shadow-sm">
-                                                <div className="flex items-center justify-between mb-8">
-                                                    <h3 className="font-outfit text-lg font-bold text-foreground">Injected Incidents History</h3>
-                                                    <span className="text-xs text-muted-foreground flex items-center gap-1"><Clock size={12} /> Recent 7 days</span>
+                                                <div className="flex items-center justify-between mb-6">
+                                                    <h3 className="font-outfit text-lg font-bold text-foreground">Incident Activity</h3>
+                                                    <div className="flex items-center gap-4">
+                                                        <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> Warning</span>
+                                                        <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-500 inline-block" /> Normal</span>
+                                                    </div>
                                                 </div>
-                                                <div className="h-64 flex items-end justify-between gap-2">
-                                                    {[{ h: 40, d: 'Mon' }, { h: 65, d: 'Tue' }, { h: 30, d: 'Wed' }, { h: 85, d: 'Thu' }, { h: 45, d: 'Fri' }, { h: 90, d: 'Sat' }, { h: 60, d: 'Sun' }].map((bar, i) => (
-                                                        <div key={i} className="flex-1 flex flex-col items-center gap-2">
-                                                            <div className="w-full bg-muted rounded-t-lg relative group flex-1">
-                                                                <motion.div
-                                                                    initial={{ height: 0 }}
-                                                                    animate={{ height: `${bar.h}%` }}
-                                                                    transition={{ delay: 0.5 + i * 0.08, duration: 0.8, type: 'spring', stiffness: 60 }}
-                                                                    className="absolute bottom-0 left-0 w-full bg-indigo-500/20 rounded-t-lg group-hover:bg-indigo-500/40 transition-colors"
-                                                                />
+                                                {(() => {
+                                                    const reasonCounts = {};
+                                                    dashEvents.forEach(evt => {
+                                                        const r = evt.reason || 'Unknown';
+                                                        if (!reasonCounts[r]) reasonCounts[r] = { normal: 0, warning: 0 };
+                                                        const count = evt.count || 1;
+                                                        if (evt.type === 'Warning') reasonCounts[r].warning += count;
+                                                        else reasonCounts[r].normal += count;
+                                                    });
+                                                    const reasons = Object.entries(reasonCounts)
+                                                        .map(([reason, counts]) => ({ reason, ...counts, total: counts.normal + counts.warning }))
+                                                        .sort((a, b) => b.total - a.total)
+                                                        .slice(0, 8);
+                                                    const maxCount = Math.max(...reasons.map(r => r.total), 1);
+
+                                                    if (reasons.length === 0) {
+                                                        return (
+                                                            <div className="h-52 flex flex-col items-center justify-center gap-3 text-center">
+                                                                <CheckCircle2 size={40} className="text-success" />
+                                                                <p className="text-sm font-medium text-success">No events in this namespace</p>
+                                                                <p className="text-[11px] text-muted-foreground">Your cluster is quiet — nothing to report.</p>
                                                             </div>
-                                                            <span className="text-[9px] text-muted-foreground font-medium">{bar.d}</span>
+                                                        );
+                                                    }
+
+                                                    return (
+                                                        <div className="space-y-3">
+                                                            {reasons.map((item, i) => (
+                                                                <motion.div
+                                                                    key={item.reason}
+                                                                    initial={{ opacity: 0, x: -20 }}
+                                                                    animate={{ opacity: 1, x: 0 }}
+                                                                    transition={{ delay: 0.1 + i * 0.05 }}
+                                                                    className="group"
+                                                                >
+                                                                    <div className="flex items-center justify-between mb-1">
+                                                                        <span className="text-xs font-semibold text-foreground truncate max-w-[200px]">{item.reason}</span>
+                                                                        <span className="text-[10px] text-muted-foreground font-mono">{item.total}</span>
+                                                                    </div>
+                                                                    <div className="h-5 bg-muted rounded-lg overflow-hidden flex">
+                                                                        {item.warning > 0 && (
+                                                                            <motion.div
+                                                                                initial={{ width: 0 }}
+                                                                                animate={{ width: `${(item.warning / maxCount) * 100}%` }}
+                                                                                transition={{ delay: 0.3 + i * 0.05, duration: 0.6, type: 'spring', stiffness: 80 }}
+                                                                                className="bg-red-500 rounded-l-lg group-hover:bg-red-400 transition-colors"
+                                                                                style={{ minWidth: item.warning > 0 ? '4px' : 0 }}
+                                                                                title={`${item.warning} warning${item.warning > 1 ? 's' : ''}`}
+                                                                            />
+                                                                        )}
+                                                                        {item.normal > 0 && (
+                                                                            <motion.div
+                                                                                initial={{ width: 0 }}
+                                                                                animate={{ width: `${(item.normal / maxCount) * 100}%` }}
+                                                                                transition={{ delay: 0.35 + i * 0.05, duration: 0.6, type: 'spring', stiffness: 80 }}
+                                                                                className={`bg-indigo-500 group-hover:bg-indigo-400 transition-colors ${item.warning === 0 ? 'rounded-l-lg' : ''} rounded-r-lg`}
+                                                                                style={{ minWidth: item.normal > 0 ? '4px' : 0 }}
+                                                                                title={`${item.normal} normal`}
+                                                                            />
+                                                                        )}
+                                                                    </div>
+                                                                </motion.div>
+                                                            ))}
                                                         </div>
-                                                    ))}
-                                                </div>
+                                                    );
+                                                })()}
                                             </div>
-                                            <div className="bg-indigo-600 rounded-2xl p-6 text-white shadow-xl shadow-indigo-500/20 flex flex-col justify-between">
-                                                <div>
-                                                    <Zap size={32} className="mb-4 text-indigo-200" />
-                                                    <h3 className="text-2xl font-bold font-outfit mb-2 text-white">Ready to benchmark?</h3>
-                                                    <p className="text-indigo-100 text-sm leading-relaxed">System is armed with 6 critical failure scenarios. Inject them to test your AI agent's logic.</p>
+                                            <div className="bg-card rounded-2xl border border-border p-6 shadow-sm flex flex-col">
+                                                <div className="flex items-center gap-3 mb-5">
+                                                    <div className="p-2 bg-amber-500/10 rounded-xl"><AlertCircle className="text-amber-500" size={20} /></div>
+                                                    <div>
+                                                        <h3 className="font-outfit font-bold text-foreground">Recent Warnings</h3>
+                                                        <p className="text-[10px] text-muted-foreground">Latest cluster warning events</p>
+                                                    </div>
                                                 </div>
-                                                <button onClick={() => setActiveTab('scenarios')} className="w-full mt-8 py-3 bg-white text-indigo-700 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-50 transition-all active:scale-95 shadow-lg shadow-black/20">
-                                                    Go to Scenarios <ArrowUpRight size={18} />
+                                                <div className="flex-1 overflow-auto custom-scrollbar space-y-2">
+                                                    {(() => {
+                                                        const warnings = dashEvents.filter(e => e.type === 'Warning').slice(0, 5);
+                                                        if (warnings.length === 0) {
+                                                            return (
+                                                                <div className="flex flex-col items-center justify-center h-full gap-2 py-8">
+                                                                    <CheckCircle2 size={28} className="text-success" />
+                                                                    <p className="text-xs font-medium text-success">All clear</p>
+                                                                    <p className="text-[10px] text-muted-foreground text-center">No warnings in this namespace</p>
+                                                                </div>
+                                                            );
+                                                        }
+                                                        return warnings.map((evt, i) => (
+                                                            <div key={i} className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/10 hover:border-amber-500/25 transition-colors">
+                                                                <div className="flex items-center justify-between mb-1">
+                                                                    <span className="text-[10px] font-bold text-amber-600 uppercase">{evt.reason}</span>
+                                                                    {evt.count > 1 && <span className="text-[9px] font-bold bg-amber-500/10 text-amber-600 px-1.5 py-0.5 rounded">×{evt.count}</span>}
+                                                                </div>
+                                                                <p className="text-[11px] text-foreground line-clamp-2 leading-snug">{evt.message}</p>
+                                                                <div className="flex items-center justify-between mt-1.5">
+                                                                    <span className="text-[9px] text-muted-foreground truncate max-w-[120px]">{evt.involved_object}</span>
+                                                                    <span className="text-[9px] text-muted-foreground">{evt.source}</span>
+                                                                </div>
+                                                            </div>
+                                                        ));
+                                                    })()}
+                                                </div>
+                                                <button
+                                                    onClick={() => setActiveTab('events')}
+                                                    className="w-full mt-4 py-2.5 bg-muted hover:bg-muted/80 text-foreground rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
+                                                >
+                                                    View All Events <ArrowUpRight size={14} />
                                                 </button>
                                             </div>
                                         </div>
@@ -709,6 +1113,26 @@ function App() {
                                 )}
                             </motion.div>
                         )}
+                        {activeTab === 'workloads' && (
+                            <motion.div key="workloads" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.35 }}>
+                                <WorkloadsTab api={api} selectedNS={selectedNS} onPodClick={(pod) => { setSelectedPod(pod); runDiagnosis(pod.name); }} />
+                            </motion.div>
+                        )}
+                        {activeTab === 'events' && (
+                            <motion.div key="events" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.35 }}>
+                                <EventsTab api={api} selectedNS={selectedNS} />
+                            </motion.div>
+                        )}
+                        {activeTab === 'networking' && (
+                            <motion.div key="networking" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.35 }}>
+                                <NetworkingTab api={api} selectedNS={selectedNS} />
+                            </motion.div>
+                        )}
+                        {activeTab === 'topology' && (
+                            <motion.div key="topology" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.35 }}>
+                                <TopologyTab api={api} selectedNS={selectedNS} />
+                            </motion.div>
+                        )}
                     </AnimatePresence>
                 </div>
             </main>
@@ -722,7 +1146,7 @@ function App() {
                         exit={{ opacity: 0 }}
                         transition={{ duration: 0.2 }}
                         className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
-                        onClick={() => setSelectedPod(null)}
+                        onClick={closeInspector}
                     />
                 )}
             </AnimatePresence>
@@ -744,10 +1168,19 @@ function App() {
                                 </div>
                                 <div>
                                     <h2 className="text-lg font-bold font-outfit uppercase tracking-tight text-foreground">AI Inspector</h2>
-                                    <p className="text-[10px] text-muted-foreground font-mono tracking-widest uppercase">Live Diagnostic Session</p>
                                 </div>
                             </div>
-                            <button onClick={() => setSelectedPod(null)} className="w-8 h-8 flex items-center justify-center hover:bg-muted rounded-full text-muted-foreground hover:text-foreground transition-colors" title="Close (Esc)">✕</button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => runDiagnosis(selectedPod.name)}
+                                    disabled={loading}
+                                    className="px-4 py-2 bg-indigo-50 border border-indigo-100 text-indigo-600 rounded-xl text-[11px] font-bold flex items-center gap-2 hover:bg-indigo-100 transition-all disabled:opacity-50"
+                                >
+                                    <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                                    REFRESH ANALYSIS
+                                </button>
+                                <button onClick={closeInspector} className="w-8 h-8 flex items-center justify-center hover:bg-muted rounded-full text-muted-foreground hover:text-foreground transition-colors" title="Close (Esc)">✕</button>
+                            </div>
                         </div>
 
                         <div className="flex-1 overflow-auto p-8 custom-scrollbar relative">
@@ -827,19 +1260,77 @@ function App() {
                                         <p className="text-xs text-muted-foreground">{diagnosis.fix_summary}</p>
                                         <div className="space-y-3">
                                             {(diagnosis.fix_steps || []).filter(step => step.label).map((step, i) => (
-                                                <div key={i} className="p-5 bg-muted/30 border border-border rounded-2xl hover:border-indigo-500/30 transition-all flex flex-col gap-3 group">
+                                                <div key={i} className="p-5 bg-muted/30 border border-border rounded-2xl hover:border-indigo-500/30 transition-all flex flex-col gap-4 group">
                                                     <div className="flex items-center justify-between">
                                                         <span className="text-[11px] font-bold text-foreground">{step.label}</span>
                                                         <span className="text-[9px] px-2 py-0.5 bg-indigo-500/10 text-indigo-600 rounded uppercase font-bold">{step.type}</span>
                                                     </div>
+
+                                                    {step.reasoning && (
+                                                        <div className="p-3 bg-indigo-50/50 border border-indigo-100/50 rounded-xl">
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                <Zap size={10} className="text-indigo-600" />
+                                                                <span className="text-[9px] font-bold text-indigo-700 uppercase tracking-wider">Reasoning</span>
+                                                            </div>
+                                                            <p className="text-[11px] text-indigo-900/70 leading-relaxed italic">{step.reasoning}</p>
+                                                        </div>
+                                                    )}
+
                                                     {step.command && (
-                                                        <div className="relative flex items-center gap-2">
-                                                            <code className="flex-1 p-3 bg-slate-900 rounded-xl text-[10px] font-mono text-indigo-300 truncate">{step.command}</code>
-                                                            <button onClick={() => { navigator.clipboard.writeText(step.command); setCopiedCmd(i); setTimeout(() => setCopiedCmd(null), 2000); }}
-                                                                className={`p-2.5 border rounded-xl shadow-sm flex-shrink-0 transition-all ${copiedCmd === i ? 'bg-success/10 border-success/30 text-success' : 'bg-card border-border text-muted-foreground hover:text-indigo-600'}`}
-                                                            >
-                                                                {copiedCmd === i ? <CheckCircle2 size={14} /> : <Command size={14} />}
-                                                            </button>
+                                                        <div className="space-y-3">
+                                                            <div className="flex flex-col gap-2">
+                                                                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Proposed Fix:</span>
+                                                                <div className="relative group">
+                                                                    <code className="block w-full p-4 bg-slate-950 rounded-xl text-[11px] font-mono text-indigo-300 whitespace-pre-wrap break-all border border-indigo-500/20 shadow-inner">
+                                                                        {step.command}
+                                                                    </code>
+                                                                </div>
+                                                                <div className="flex justify-end gap-2">
+                                                                    <button
+                                                                        onClick={() => { navigator.clipboard.writeText(step.command); setCopiedCmd(i); setTimeout(() => setCopiedCmd(null), 2000); }}
+                                                                        className={`p-2.5 border rounded-xl shadow-sm flex-shrink-0 transition-all ${copiedCmd === i ? 'bg-success/10 border-success/30 text-success' : 'bg-card border-border text-muted-foreground hover:text-indigo-600'}`}
+                                                                        title="Copy to clipboard"
+                                                                    >
+                                                                        {copiedCmd === i ? <CheckCircle2 size={14} /> : <Command size={14} />}
+                                                                    </button>
+                                                                    {(step.command.toLowerCase().startsWith('kubectl') && !step.command.toLowerCase().includes(' edit ')) && (
+                                                                        <button
+                                                                            disabled={executingCmd !== null}
+                                                                            onClick={() => handleExecuteCommand(step.command, i)}
+                                                                            className={`p-2.5 border rounded-xl shadow-sm flex-shrink-0 transition-all flex items-center gap-2 ${executingCmd === i ? 'bg-indigo-500/10 border-indigo-500/30' : 'bg-card border-border text-indigo-600 hover:bg-indigo-50'}`}
+                                                                            title="Execute on cluster"
+                                                                        >
+                                                                            {executingCmd === i ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
+                                                                            <span className="text-[10px] font-bold">RUN</span>
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+
+                                                            {executionResults[i] && (
+                                                                <motion.div
+                                                                    initial={{ opacity: 0, scale: 0.95 }}
+                                                                    animate={{ opacity: 1, scale: 1 }}
+                                                                    className={`rounded-xl border p-4 font-mono text-[10px] shadow-sm relative overflow-hidden group/console ${executionResults[i].success ? 'bg-emerald-50/50 border-emerald-200/50 text-emerald-800' : 'bg-rose-50/50 border-rose-200/50 text-rose-800'}`}
+                                                                >
+                                                                    <div className="flex justify-between items-center mb-3">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <Terminal size={12} className="opacity-60" />
+                                                                            <span className="font-bold uppercase tracking-widest text-[9px]">{executionResults[i].success ? 'Execution Success' : 'Execution Failed'}</span>
+                                                                        </div>
+                                                                        <button onClick={() => setExecutionResults(prev => { const n = { ...prev }; delete n[i]; return n; })} className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-black/5 opacity-40 hover:opacity-100 transition-all">✕</button>
+                                                                    </div>
+                                                                    <div className="max-h-[150px] overflow-auto custom-scrollbar-thin">
+                                                                        <pre className="whitespace-pre-wrap leading-relaxed">{executionResults[i].stdout || executionResults[i].stderr}</pre>
+                                                                    </div>
+                                                                    {executionResults[i].success && (
+                                                                        <div className="mt-3 pt-3 border-t border-emerald-200/30 flex items-center gap-2">
+                                                                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                                                            <span className="text-[9px] font-bold opacity-60 uppercase italic">Health states re-polling...</span>
+                                                                        </div>
+                                                                    )}
+                                                                </motion.div>
+                                                            )}
                                                         </div>
                                                     )}
                                                 </div>
