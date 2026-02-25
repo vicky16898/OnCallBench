@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY scenarios/ ./scenarios/
 
+# Add src to python path so local imports work
+ENV PYTHONPATH=/app/src
+
 # Expose FastAPI port
 EXPOSE 8000
 

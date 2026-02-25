@@ -45,7 +45,9 @@ def get_pods_logic(namespace: str):
     return pod_list
 
 def get_deployments_logic(namespace: str):
+    print(f"DEBUG: get_deployments_logic called for namespace: {namespace}")
     deps = apps_v1.list_namespaced_deployment(namespace)
+    print(f"DEBUG: Found {len(deps.items)} deployments")
     result = []
     for d in deps.items:
         conditions = []
@@ -479,3 +481,84 @@ def gather_pod_data_for_diagnosis(namespace: str, pod_name: str):
         "parent_spec": parent_spec,
         "container_statuses_summary": container_statuses_summary
     }
+
+def search_resources_logic(query: str):
+    """Searches for resources by name across all namespaces."""
+    if not query or len(query) < 2:
+        return []
+        
+    query = query.lower()
+    results = []
+    
+    # Search Pods
+    try:
+        pods = v1.list_pod_for_all_namespaces()
+        for p in pods.items:
+            if query in p.metadata.name.lower():
+                results.append({
+                    "kind": "Pod",
+                    "name": p.metadata.name,
+                    "namespace": p.metadata.namespace,
+                    "status": p.status.phase,
+                    "is_healthy": p.status.phase == "Running" and all(cs.ready for cs in (p.status.container_statuses or []))
+                })
+                if len(results) >= 50: return results
+    except Exception: pass
+
+    # Search Deployments
+    try:
+        deps = apps_v1.list_deployment_for_all_namespaces()
+        for d in deps.items:
+            if query in d.metadata.name.lower():
+                results.append({
+                    "kind": "Deployment",
+                    "name": d.metadata.name,
+                    "namespace": d.metadata.namespace,
+                    "status": "Healthy" if (d.status.ready_replicas or 0) >= (d.spec.replicas or 0) else "Degraded",
+                    "is_healthy": (d.status.ready_replicas or 0) >= (d.spec.replicas or 0)
+                })
+                if len(results) >= 50: return results
+    except Exception: pass
+
+    # Search Services
+    try:
+        svcs = v1.list_service_for_all_namespaces()
+        for s in svcs.items:
+            if query in s.metadata.name.lower():
+                results.append({
+                    "kind": "Service",
+                    "name": s.metadata.name,
+                    "namespace": s.metadata.namespace,
+                    "status": s.spec.type,
+                    "is_healthy": True
+                })
+                if len(results) >= 50: return results
+    except Exception: pass
+
+    # Search Ingresses
+    try:
+        ings = networking_v1.list_ingress_for_all_namespaces()
+        for i in ings.items:
+            if query in i.metadata.name.lower():
+                results.append({
+                    "kind": "Ingress",
+                    "name": i.metadata.name,
+                    "namespace": i.metadata.namespace,
+                    "status": "Active",
+                    "is_healthy": True
+                })
+                if len(results) >= 50: return results
+    except Exception: pass
+
+    return results
+
+def get_pod_logs_logic(namespace: str, pod_name: str, tail: int = 200):
+    """Fetches logs for a pod, with fallback to previous logs."""
+    try:
+        return v1.read_namespaced_pod_log(pod_name, namespace, tail_lines=tail)
+    except Exception:
+        try:
+            prev_logs = v1.read_namespaced_pod_log(pod_name, namespace, tail_lines=tail, previous=True)
+            return f"PREVIOUS LOGS (CRASHED):\n{prev_logs}"
+        except Exception:
+            return "No logs available."

@@ -24,7 +24,8 @@ import {
     Box,
     Globe,
     Network,
-    GitBranch
+    GitBranch,
+    Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import WorkloadsTab from './components/WorkloadsTab';
@@ -54,6 +55,15 @@ function App() {
     const [benchmarks, setBenchmarks] = useState([]);
     const [refreshing, setRefreshing] = useState(false);
     const [statsDetail, setStatsDetail] = useState(null);
+    const [podsLoading, setPodsLoading] = useState(false);
+
+    // Search State
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [showSearch, setShowSearch] = useState(false);
+    const latestQuery = useRef('');
+    const searchRef = useRef(null);
+    const searchInputRef = useRef(null);
     const [lastRefreshed, setLastRefreshed] = useState(null);
     const [copiedCmd, setCopiedCmd] = useState(null);
     const [appInfo, setAppInfo] = useState(null);
@@ -321,6 +331,89 @@ function App() {
 
     const toggleTheme = () => setTheme(theme === 'light' ? 'dark' : 'light');
 
+    // Search Logic
+    const handleSearch = useCallback(async (query) => {
+        setSearchQuery(query);
+        latestQuery.current = query;
+        const trimmed = query.trim();
+
+        if (!trimmed || trimmed.length < 2) {
+            setSearchResults([]);
+            return;
+        }
+
+        try {
+            const res = await api.get('/search', { params: { q: trimmed } });
+            // RACE CONDITION FIX: Only update if this is still the active search
+            if (latestQuery.current === query) {
+                setSearchResults(res.data || []);
+            }
+        } catch (err) {
+            console.error("Search failed", err);
+        }
+    }, []);
+
+    const handleSelectSearchResult = (result) => {
+        setSearchQuery('');
+        setSearchResults([]);
+        setShowSearch(false);
+
+        // Navigate
+        setSelectedNS(result.namespace);
+        if (result.kind === 'Pod') {
+            setActiveTab('pods');
+            // Immediate partial pod for the drawer
+            const partialPod = {
+                name: result.name,
+                status: result.status,
+                is_healthy: result.is_healthy,
+                restarts: '-',
+                age: new Date().toISOString()
+            };
+            setSelectedPod(partialPod);
+            runDiagnosis(result.name);
+
+            // Re-sync with real data once available
+            setTimeout(async () => {
+                const freshPods = await fetchPods(result.namespace);
+                const realPod = freshPods.find(p => p.name === result.name);
+                if (realPod) setSelectedPod(realPod);
+            }, 500);
+        } else if (['Deployment', 'StatefulSet', 'DaemonSet'].includes(result.kind)) {
+            setActiveTab('workloads');
+        } else if (result.kind === 'Service' || result.kind === 'Ingress') {
+            setActiveTab('networking');
+        }
+    };
+
+    // Keyboard Shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                e.preventDefault();
+                setShowSearch(true);
+                setTimeout(() => searchInputRef.current?.focus(), 10);
+            }
+            if (e.key === 'Escape') {
+                setShowSearch(false);
+                setSearchResults([]);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+
+    // Close search on click outside
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (searchRef.current && !searchRef.current.contains(e.target)) {
+                setShowSearch(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
     return (
         <div className="flex h-screen bg-background transition-colors duration-300 overflow-hidden font-inter">
             {/* Sidebar */}
@@ -385,11 +478,79 @@ function App() {
 
             {/* Main Content */}
             <main className="flex-1 flex flex-col relative overflow-hidden">
-                <header className="h-16 flex items-center justify-between px-8 bg-card/50 backdrop-blur-md border-b border-border flex-shrink-0">
+                <header className="h-16 flex items-center justify-between px-8 bg-card/50 backdrop-blur-md border-b border-border flex-shrink-0 z-30">
                     <div className="flex items-center gap-3">
                         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{activeTab}</h2>
                         <ChevronRight size={14} className="text-muted-foreground/40" />
                         <span className="text-sm font-medium text-foreground">{selectedNS || 'Loading...'}</span>
+                    </div>
+
+                    <div className="flex-1 max-w-md mx-8 relative" ref={searchRef}>
+                        <div className={`flex items-center gap-2 px-3 py-1.5 bg-muted/50 border rounded-xl transition-all ${showSearch ? 'border-indigo-500 ring-2 ring-indigo-500/10' : 'border-border'}`}>
+                            <Search size={16} className="text-muted-foreground" />
+                            <input
+                                ref={searchInputRef}
+                                type="text"
+                                placeholder="Search resources (CMD+K)"
+                                className="bg-transparent border-none outline-none text-xs w-full text-foreground placeholder:text-muted-foreground/50"
+                                value={searchQuery}
+                                onFocus={() => setShowSearch(true)}
+                                onChange={(e) => handleSearch(e.target.value)}
+                            />
+                            {searchQuery ? (
+                                <button
+                                    onClick={() => { handleSearch(''); searchInputRef.current?.focus(); }}
+                                    className="p-1 hover:bg-muted rounded-full text-muted-foreground hover:text-foreground transition-all"
+                                >
+                                    <span className="text-xs">✕</span>
+                                </button>
+                            ) : (
+                                <div className="hidden md:flex items-center gap-1 px-1.5 py-0.5 bg-background border border-border rounded text-[9px] font-bold text-muted-foreground">
+                                    <Command size={10} /> K
+                                </div>
+                            )}
+                        </div>
+
+                        <AnimatePresence>
+                            {showSearch && searchQuery.length >= 2 && searchResults.length > 0 && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: 10 }}
+                                    className="absolute top-full left-0 right-0 mt-2 bg-card border border-border rounded-2xl shadow-2xl z-50 overflow-hidden"
+                                >
+                                    <div className="max-h-96 overflow-y-auto custom-scrollbar">
+                                        {searchResults.map((res, idx) => (
+                                            <button
+                                                key={idx}
+                                                onClick={() => handleSelectSearchResult(res)}
+                                                className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/50 border-b border-border last:border-0 transition-colors group"
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <div className={`p-1.5 rounded-lg ${res.is_healthy ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>
+                                                        {res.kind === 'Pod' ? <Activity size={14} /> : res.kind === 'Service' ? <Globe size={14} /> : <Box size={14} />}
+                                                    </div>
+                                                    <div className="text-left">
+                                                        <div className="text-xs font-bold text-foreground group-hover:text-indigo-600 transition-colors">{res.name}</div>
+                                                        <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                                            <span className="font-bold text-indigo-500">{res.kind}</span> in {res.namespace}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${res.is_healthy ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>{res.status}</span>
+                                                    <ChevronRight size={14} className="text-muted-foreground group-hover:translate-x-0.5 transition-all" />
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="p-3 bg-muted/30 border-t border-border flex justify-between items-center">
+                                        <span className="text-[9px] text-muted-foreground uppercase font-bold tracking-widest">{searchResults.length} results found</span>
+                                        <span className="text-[9px] text-muted-foreground">ESC to close</span>
+                                    </div>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
                     </div>
 
                     <div className="flex items-center gap-6">
@@ -926,7 +1087,16 @@ function App() {
                                             </tr>
                                         </thead>
                                         <tbody className="text-sm">
-                                            {pods.length > 0 ? pods.map((pod, podIdx) => (
+                                            {podsLoading ? (
+                                                <tr>
+                                                    <td colSpan="5">
+                                                        <div className="py-20 flex flex-col items-center justify-center">
+                                                            <RefreshCw size={24} className="text-indigo-600 animate-spin mb-4" />
+                                                            <p className="text-xs text-muted-foreground font-medium">Reconciling cluster state...</p>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ) : pods.length > 0 ? pods.map((pod, podIdx) => (
                                                 <motion.tr
                                                     key={pod.name}
                                                     initial={{ opacity: 0, x: -30 }}

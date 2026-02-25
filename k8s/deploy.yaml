@@ -18,7 +18,7 @@ metadata:
   name: oncall-admin-role
 rules:
 - apiGroups: ["", "apps", "networking.k8s.io", "batch"]
-  resources: ["pods", "pods/log", "events", "namespaces", "deployments", "services", "networkpolicies", "jobs"]
+  resources: ["pods", "pods/log", "events", "namespaces", "deployments", "services", "networkpolicies", "jobs", "replicasets", "statefulsets", "daemonsets", "ingresses"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 ---
@@ -44,7 +44,7 @@ metadata:
   namespace: oncall-bench
 type: Opaque
 stringData:
-  GOOGLE_API_KEY: "REPLACE_WITH_YOUR_KEY"
+  GOOGLE_API_KEY: "replace_your_key"
 
 ---
 # 3. Backend - The FastAPI engine

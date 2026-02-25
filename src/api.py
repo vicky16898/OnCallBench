@@ -271,6 +271,11 @@ async def diagnose(request: DiagnosticRequest):
         print(f"Diagnosis Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/search")
+async def search_resources(q: str):
+    from k8s_service import search_resources_logic
+    return search_resources_logic(q)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
