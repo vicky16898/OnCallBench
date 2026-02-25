@@ -41,6 +41,29 @@ def run_kubectl_tool(command: str):
     except Exception as e:
         return str(e)
 
+def cluster_wide_health_tool():
+    """Returns cluster nodes status and resource usage to check for global issues."""
+    try:
+        import sys
+        is_win = sys.platform == 'win32'
+        
+        # Get nodes and their resource usage
+        cmds = [
+            "kubectl get nodes -o wide",
+            "kubectl top nodes"
+        ]
+        results = []
+        for cmd in cmds:
+            if is_win:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, shell=True)
+            else:
+                res = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=10, shell=False)
+            results.append(f"--- {cmd} ---\n{res.stdout if res.returncode == 0 else res.stderr}")
+            
+        return "\n".join(results)
+    except Exception as e:
+        return f"Error fetching cluster health: {str(e)}"
+
 from dotenv import load_dotenv
 
 # Ensure environment variables are loaded
@@ -60,7 +83,7 @@ class DebuggerAgent:
             self.model = model or "gemini-2.0-flash"
             genai.configure(api_key=self.api_key)
             # Define tools for Gemini
-            self.tools = [run_kubectl_tool]
+            self.tools = [run_kubectl_tool, cluster_wide_health_tool]
             self.client = genai.GenerativeModel(
                 model_name=self.model,
                 tools=self.tools
@@ -71,6 +94,7 @@ class DebuggerAgent:
     def diagnose(self, bundle: Dict[str, Any]):
         """Main entry point for diagnosis. Takes a dictionary bundle directly."""
         console.print(f"[bold blue]Agent ({self.provider}) starting multi-step diagnosis...[/bold blue]")
+        self.investigation_steps = [{"command": "Initial Triage", "findings": "Analyzing pod metadata, logs, and events bundle..."}]
         
         if self.provider == "openai":
             return self._diagnose_openai(bundle)
@@ -79,29 +103,39 @@ class DebuggerAgent:
 
     def _diagnose_openai(self, bundle):
         # OpenAI implementation with tool-calling
-        tools = [{
-            "type": "function",
-            "function": {
-                "name": "run_kubectl_tool",
-                "description": "Run a kubectl command (get, describe, logs, top, events) to gather more info.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {"type": "string", "description": "The full kubectl command, e.g. 'kubectl describe pod mypod'"}
-                    },
-                    "required": ["command"]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_kubectl_tool",
+                    "description": "Run a kubectl command (get, describe, logs, top, events) to gather more info.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "string", "description": "The full kubectl command, e.g. 'kubectl describe pod mypod'"}
+                        },
+                        "required": ["command"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "cluster_wide_health_tool",
+                    "description": "Check cluster nodes and resource usage to see if the issue is global (e.g. Node Pressure).",
+                    "parameters": {"type": "object", "properties": {}}
                 }
             }
-        }]
+        ]
         
         messages = [
             {"role": "system", "content": """You are a Principal SRE. Your goal is to find the technical root cause of a K8s incident.
             
             STRATEGY:
             1. Analyze the initial bundle.
-            2. Run extra kubectl commands to verify your theory (describe failing resources, check events).
-            3. If you find a clear fix, provide it.
-            4. If you CANNOT find a clear fix, provide a detailed "Manual Investigation Guide" to help a human SRE finish the job.
+            2. Run extra kubectl commands to verify your theory.
+            3. Use 'cluster_wide_health_tool' if you suspect the node is over capacity or healthy pods are failing across the cluster.
+            4. If you find a clear fix, provide it.
             
             OUTPUT FORMAT (JSON):
             - root_cause: string
@@ -114,21 +148,36 @@ class DebuggerAgent:
             {"role": "user", "content": f"Initial Incident Bundle:\n{json.dumps(bundle, default=str)[:10000]}"}
         ]
         
-        for _ in range(5): # Up to 5 turns of investigation
+        for _ in range(5):
             response = self.client.chat.completions.create(model=self.model, messages=messages, tools=tools)
             msg = response.choices[0].message
             messages.append(msg)
             if not msg.tool_calls: break
             
             for tool_call in msg.tool_calls:
-                args = json.loads(tool_call.function.arguments)
-                console.print(f"[dim]Running: {args['command']}[/dim]")
-                result = run_kubectl_tool(args['command'])
-                messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": "run_kubectl_tool", "content": result})
+                name = tool_call.function.name
+                if name == "run_kubectl_tool":
+                    args = json.loads(tool_call.function.arguments)
+                    cmd = args['command']
+                    console.print(f"[dim]Running: {cmd}[/dim]")
+                    result = run_kubectl_tool(cmd)
+                else: # cluster_wide_health_tool
+                    cmd = "cluster check"
+                    console.print(f"[dim]Running: {cmd}[/dim]")
+                    result = cluster_wide_health_tool()
+                
+                self.investigation_steps.append({
+                    "command": cmd,
+                    "findings": result[:500] + "..." if len(result) > 500 else result
+                })
+                
+                messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": result})
 
-        messages.append({"role": "user", "content": "Provide Final Diagnosis as JSON. If no fix is found, use 'fix_steps' to provide investigation pointers with type 'investigation'."})
+        messages.append({"role": "user", "content": "Provide Final Diagnosis as JSON. Return valid JSON only."})
         final_response = self.client.chat.completions.create(model=self.model, messages=messages, response_format={"type": "json_object"})
-        return json.loads(final_response.choices[0].message.content)
+        diagnosis = json.loads(final_response.choices[0].message.content)
+        diagnosis["investigation_steps"] = self.investigation_steps
+        return diagnosis
 
     def _diagnose_google(self, bundle):
         # Gemini implementation with native tool-calling
@@ -137,15 +186,17 @@ class DebuggerAgent:
         system_instructions = """You are a Principal SRE. Find the technical root cause of this K8s incident.
         Analyze the bundle, run extra commands if needed, and provide the fix.
         
+        INVESTIGATION LOG:
+        Every tool you call will be recorded. Use them to prove your theories.
+        If a pod is OOMKilled or Pending, check cluster health to see if the node is full.
+        
         CRITICAL RULES FOR FIXES:
-        1. NEVER suggest interactive commands like 'kubectl edit' or 'kubectl exec -it'. These cannot be automated.
+        1. NEVER suggest interactive commands like 'kubectl edit' or 'kubectl exec -it'.
         2. ALWAYS prioritize 'kubectl set image' for image issues.
         3. ALWAYS prioritize 'kubectl patch' for configuration/env/resource issues.
-        4. If the command can be run non-interactively, use type: "kubectl". This enables the 'Execute' button.
-        5. Only use type: "manual" for things that truly require a human (e.g., "Check the external firewall").
+        4. If the command can be run non-interactively, use type: "kubectl".
         
         OUTPUT FORMAT (JSON):
-        Respond with ONLY a JSON object:
         {
           "root_cause": "string",
           "symptoms": ["string"],
@@ -160,21 +211,42 @@ class DebuggerAgent:
         response = chat.send_message(prompt)
         text = response.text
         
-        # Extract JSON
+        # Manually extract investigation steps for Gemini since it's automatic tool calling
+        # Link function calls with their responses from history
+        calls = {}
+        for history in chat.history:
+            if history.role == "model" and history.parts:
+                for part in history.parts:
+                    if hasattr(part, 'function_call') and part.function_call:
+                        calls[part.function_call.name] = part.function_call.args.get('command', part.function_call.name)
+            elif history.role == "user" and history.parts:
+                for part in history.parts:
+                    if hasattr(part, 'function_response') and part.function_response:
+                        name = part.function_response.name
+                        # If we have a call for this, record it
+                        cmd = calls.get(name, name)
+                        resp = str(part.function_response.response.get('result', 'Executed successfully.'))
+                        self.investigation_steps.append({
+                            "command": cmd,
+                            "findings": resp[:500] + "..." if len(resp) > 500 else resp
+                        })
+
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
         elif "```" in text:
             text = text.split("```")[1].split("```")[0]
             
         try:
-            return json.loads(text.strip())
+            diagnosis = json.loads(text.strip())
+            diagnosis["investigation_steps"] = self.investigation_steps
+            return diagnosis
         except Exception:
-            # Fallback if AI didn't return valid JSON
             return {
                 "root_cause": text[:500],
                 "symptoms": ["Analysis completed"],
                 "fix_summary": "Manual review needed",
-                "fix_steps": [{"label": "Review logs", "command": "kubectl logs ...", "reasoning": "AI returned text response", "type": "manual"}],
+                "fix_steps": [{"label": "Review pods", "command": "kubectl get pods", "reasoning": "Fallback", "type": "manual"}],
+                "investigation_steps": self.investigation_steps,
                 "confidence_score": 0.5,
                 "risk_level": "Medium"
             }

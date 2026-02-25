@@ -1238,6 +1238,33 @@ function App() {
                                         </div>
                                     </div>
 
+                                    {/* Investigation Audit Timeline */}
+                                    {diagnosis.investigation_steps && diagnosis.investigation_steps.length > 0 && (
+                                        <div className="space-y-4">
+                                            <h5 className="text-xs font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
+                                                <History size={14} className="text-indigo-400" /> Investigation Audit
+                                            </h5>
+                                            <div className="border-l-2 border-indigo-500/20 ml-1.5 pl-6 space-y-6">
+                                                {diagnosis.investigation_steps.map((step, idx) => (
+                                                    <div key={idx} className="relative">
+                                                        <div className="absolute -left-[31px] top-1.5 w-2.5 h-2.5 rounded-full bg-indigo-500 border-2 border-background z-10 shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
+                                                        <div className="space-y-2">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-[9px] font-bold text-indigo-500 opacity-60 uppercase">Step {idx + 1}</span>
+                                                                <code className="text-[10px] font-mono text-indigo-400 bg-indigo-500/5 px-2 py-0.5 rounded border border-indigo-500/10 truncate max-w-sm">
+                                                                    {step.command}
+                                                                </code>
+                                                            </div>
+                                                            <div className="p-3 bg-muted/20 border border-border rounded-xl text-[9px] text-muted-foreground font-mono max-h-32 overflow-auto custom-scrollbar-thin leading-relaxed">
+                                                                {step.findings}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {/* Symptoms */}
                                     {(diagnosis.symptoms || []).length > 0 && diagnosis.symptoms[0] !== 'No issues detected' && (
                                         <div className="space-y-3">
