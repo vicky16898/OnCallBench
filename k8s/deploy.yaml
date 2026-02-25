@@ -44,7 +44,7 @@ metadata:
   namespace: oncall-bench
 type: Opaque
 stringData:
-  GOOGLE_API_KEY: "replace_your_key"
+  GOOGLE_API_KEY: "REPLACE_WITH_YOUR_KEY"
 
 ---
 # 3. Backend - The FastAPI engine
