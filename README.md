@@ -1,145 +1,209 @@
-# ⚡ OnCallBench
+<p align="center">
+  <h1 align="center">⚡ OnCallBench</h1>
+  <p align="center">
+    <strong>AI-powered Kubernetes troubleshooting that finds, diagnoses, and fixes cluster issues before you even open the terminal.</strong>
+  </p>
+  <p align="center">
+    <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" /></a>
+    <a href="https://kubernetes.io"><img src="https://img.shields.io/badge/Kubernetes-Powered-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white" alt="Kubernetes" /></a>
+    <a href="https://ai.google.dev"><img src="https://img.shields.io/badge/Gemini_2.0-AI_Engine-8E75B2?style=for-the-badge&logo=google&logoColor=white" alt="Gemini" /></a>
+    <a href="https://react.dev"><img src="https://img.shields.io/badge/React_18-Frontend-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React" /></a>
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License" /></a>
+  </p>
+</p>
 
-> **Benchmark AI agents on real Kubernetes incidents — chaos injection, Gemini-powered diagnostics, and automated scoring.**
+<br />
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://python.org)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-Powered-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io)
-[![Gemini](https://img.shields.io/badge/Gemini_2.0-AI_Diagnostics-8E75B2?logo=google&logoColor=white)](https://ai.google.dev)
-[![React](https://img.shields.io/badge/React_18-Frontend-61DAFB?logo=react&logoColor=black)](https://react.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
-
----
-
-## 🎯 What is OnCallBench?
-
-OnCallBench is an open-source benchmarking platform that tests how well AI agents handle real Kubernetes on-call incidents.
-
-**The workflow:**
-1. 🔥 **Inject** — Deploy pre-built failure scenarios (CrashLoop, OOMKill, DNS, ImagePull, etc.) into a live K8s cluster
-2. 🧠 **Diagnose** — AI (Gemini 2.0 Flash) analyzes pod logs, events, and container states to identify root cause
-3. 📊 **Score** — LLM-as-a-Judge evaluates the AI's diagnosis accuracy, fix correctness, and confidence
-
-Think of it as **"LeetCode for SRE AI agents."**
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="OnCallBench Dashboard" width="100%" />
+</p>
 
 ---
 
-## ✨ Features
+## The Problem
 
-| Feature | Description |
-|---|---|
-| 🎯 **6 Failure Scenarios** | CrashLoopBackOff, OOMKilled, ImagePullBackOff, DNS failures, Network Policies, Readiness probe failures |
-| 🧠 **AI Diagnostics** | Gemini 2.0 Flash analyzes logs, events, and container states with structured JSON output |
-| 📊 **Automated Scoring** | LLM-as-a-Judge evaluates root cause match, fix correctness, and confidence score |
-| 🖥️ **Real-time Dashboard** | Health score, pod status, namespace overview with animated stats cards |
-| 🔍 **SRE Inspector** | Click any pod → AI diagnosis with root cause, symptoms, fix steps, and kubectl commands |
-| 🌙 **Dark/Light Mode** | Premium UI with full theme support |
-| ♻️ **Auto-Refresh** | Dashboard updates every 30 seconds |
+When a Kubernetes pod crashes at 3 AM, the SRE workflow looks like this:
+
+```
+PagerDuty fires  →  SSH into cluster  →  kubectl describe pod  →  copy logs
+→  paste into ChatGPT  →  read response  →  manually craft kubectl commands
+→  hope it works  →  repeat if it doesn't
+```
+
+Every step is manual. Every incident starts from scratch. The AI has no cluster access, no context, and no ability to verify its own fix.
+
+## The Solution
+
+**OnCallBench connects AI directly to your cluster.** It watches for anomalies in real-time, diagnoses issues using multi-turn investigation with 6 specialized tools, suggests one-click fixes, and self-corrects when a fix fails — all from a single dashboard.
+
+```
+Anomaly detected  →  AI investigates (logs, events, topology)  →  Root cause identified
+→  Fix command generated  →  One-click apply  →  Auto-verified  →  Done.
+```
+
+No copy-pasting. No context switching. No guesswork.
+
+---
+
+## ✨ Key Features
+
+### 🔍 Proactive Event Watcher
+A background watcher monitors your entire cluster in real-time — detecting CrashLoops, OOMKills, failed scheduling, and probe failures **before you notice them**. Alerts auto-resolve when pods recover.
+
+<p align="center">
+  <img src="docs/screenshots/alerts.png" alt="Proactive Alerts" width="100%" />
+</p>
+
+### 🧠 AI-Powered Diagnosis
+Click any unhealthy pod → Gemini 2.0 Flash launches a multi-turn investigation using 6 tools: `kubectl` commands, log search, resource inspection, health checks, metrics, and namespace listing. It traces owner chains (Pod → ReplicaSet → Deployment), checks related Services and NetworkPolicies, and produces a structured diagnosis with root cause, symptoms, fix steps, and confidence score.
+
+### 🔧 One-Click Fixes with Self-Correction
+The AI generates ready-to-run `kubectl` commands. Click **"Apply Fix"** and it executes. If the fix fails, the error is automatically sent back to the AI for a corrected command — no manual intervention needed.
+
+### ⚙️ Workloads & Resource Management
+Full visibility into Deployments, StatefulSets, and DaemonSets with replica gauges, health status, container images, and expandable pod views.
+
+<p align="center">
+  <img src="docs/screenshots/workloads.png" alt="Workloads View" width="100%" />
+</p>
+
+### 🗺️ Topology Visualization
+Interactive dependency graph showing Service → Deployment → Pod relationships with health indicators at every level.
+
+<p align="center">
+  <img src="docs/screenshots/topology.png" alt="Topology Graph" width="100%" />
+</p>
+
+### 📊 AI Performance Benchmarks
+Inject pre-built failure scenarios (CrashLoopBackOff, OOMKill, ImagePullBackOff, etc.) and score the AI's diagnostic accuracy using an **LLM-as-a-Judge** evaluation pipeline. Track root cause match, fix correctness, and confidence across all scenarios.
+
+<p align="center">
+  <img src="docs/screenshots/benchmarks.png" alt="Performance Benchmarks" width="100%" />
+</p>
+
+---
+
+## 🔬 How the AI Agent Works
+
+OnCallBench doesn't just read logs and guess. It runs a **multi-turn investigation loop**:
+
+```
+1. OBSERVE    →  Gather pod status, events, logs, container states
+2. TRACE      →  Follow owner chain (Pod → ReplicaSet → Deployment)
+3. CORRELATE  →  Check related Services, NetworkPolicies, ConfigMaps
+4. HYPOTHESIZE →  Form root cause hypothesis
+5. VERIFY     →  Run targeted kubectl commands to confirm
+6. FIX        →  Generate idempotent, owner-aware kubectl patch
+7. VALIDATE   →  Verify fix with label selectors (not stale pod names)
+```
+
+**Safety built in:**
+- Commands restricted to a safe allowlist (no `delete namespace`, no `drain node`)
+- Fixes target parent controllers (Deployment), not individual Pods
+- All commands are non-interactive and idempotent
+- Destructive commands are automatically blocked
+
+---
+
+## 🎯 Built-in Failure Scenarios
+
+| Scenario | Difficulty | Category | What Breaks |
+|----------|-----------|----------|-------------|
+| **CrashLoopBackOff** | Easy | Container | Bad command causes immediate exit |
+| **OOMKilled** | Medium | Resources | Container exceeds memory limit |
+| **ImagePullBackOff** | Easy | Container | Invalid image tag |
+| **Missing ConfigMap** | Easy | Configuration | Referenced ConfigMap doesn't exist |
+| **Missing Secret** | Easy | Configuration | Referenced Secret doesn't exist |
+| **Readiness Probe Failure** | Medium | Health | Wrong probe path returns 404 |
+| **Liveness Probe Failure** | Medium | Health | Probe misconfigured, pod keeps restarting |
+| **Pod Stuck Pending** | Medium | Scheduling | Resource requests exceed node capacity |
+| **Port Mismatch** | Hard | Networking | Service targetPort doesn't match container port |
+
+Each scenario includes ground truth for automated scoring.
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-┌──────────────────────────────────────────────┐
-│                 React Frontend               │
-│         (Vite + Tailwind + Framer Motion)    │
-└──────────────────┬───────────────────────────┘
-                   │ HTTP (axios)
-                   ▼
-┌──────────────────────────────────────────────┐
-│              FastAPI Backend                  │
-│         (Python + Kubernetes Client)         │
-├──────────────┬───────────────────────────────┤
-│  K8s Client  │     Gemini 2.0 Flash API      │
-│  (kubectl)   │     (AI Diagnostics)          │
-└──────┬───────┴───────────────┬───────────────┘
-       ▼                       ▼
-  K8s Cluster            Google AI Studio
+┌─────────────────────────────────────────────────────────────────┐
+│                      React Frontend                             │
+│            Vite · Tailwind CSS · Framer Motion                  │
+│                                                                 │
+│  Dashboard · Workloads · Pods · Events · Networking · Topology  │
+│  Scenarios · Benchmarks · Proactive Alerts · Global Search      │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ HTTP / REST
+┌───────────────────────────┴─────────────────────────────────────┐
+│                      FastAPI Backend                             │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
+│  │ K8s Service  │  │ Event Watcher│  │   AI Agent (Gemini)    │ │
+│  │              │  │  (Proactive  │  │  Multi-turn diagnosis  │ │
+│  │ Pods, Events │  │   anomaly    │  │  6 investigation tools │ │
+│  │ Deployments  │  │  detection)  │  │  Self-correcting fixes │ │
+│  │ Services ... │  │              │  │  JSON structured output│ │
+│  └──────┬───────┘  └──────┬───────┘  └──────────┬─────────────┘ │
+│         │                 │                      │               │
+└─────────┼─────────────────┼──────────────────────┼───────────────┘
+          ▼                 ▼                      ▼
+    K8s Cluster        K8s Watch API        Google Gemini 2.0
 ```
-
----
 
 ---
 
 ## 🚀 Getting Started
 
 ### Prerequisites
-- A running Kubernetes cluster (Minikube, EKS, GKE, etc.)
-- Google Gemini API key ([get one for free here](https://aistudio.google.com/apikey))
-- Docker installed
 
----
+- A running Kubernetes cluster (Minikube, EKS, GKE, AKS, or any)
+- Google Gemini API key — [get one free](https://aistudio.google.com/apikey)
+- Python 3.10+ and Node.js 18+
 
-### 🎡 In-Cluster Deployment (Recommended)
+### Option 1: In-Cluster Deployment
 
-Run OnCallBench natively inside your cluster for low-latency diagnostics and direct control plane access.
-
-#### 1. Build & Load Images (Minikube)
-If using Minikube, load the images directly into the cluster's internal registry:
+Run OnCallBench inside your cluster for direct control plane access.
 
 ```bash
-# Build Backend
+# Build & load images (Minikube example)
 docker build -t oncall-backend:latest .
+docker build -t oncall-frontend:latest ./gui
 minikube image load oncall-backend:latest
-
-# Build Frontend
-cd gui
-docker build -t oncall-frontend:latest .
 minikube image load oncall-frontend:latest
-cd ..
-```
 
-#### 2. Configure API Key
-Open `k8s/deploy.yaml` and paste your Gemini API key in the `Secret` section:
+# Set your API key
+kubectl create secret generic oncall-secrets \
+  --from-literal=GOOGLE_API_KEY="your-key-here" \
+  -n oncall-bench --dry-run=client -o yaml | kubectl apply -f -
 
-```yaml
-# k8s/deploy.yaml
-stringData:
-  GOOGLE_API_KEY: "YOUR_AIZA_KEY_HERE" # <--- Paste key here
-```
-
-#### 3. Deploy to Cluster
-```bash
+# Deploy
 kubectl apply -f k8s/deploy.yaml
-```
 
-#### 4. Access the Dashboard
-Since the app uses a `NodePort`, use the Minikube tunnel to reach it:
-```bash
+# Access the dashboard
 minikube service oncall-frontend -n oncall-bench
 ```
 
----
+### Option 2: Local Development
 
-### 💻 Local Development
+Run on your machine while connecting to any cluster via kubeconfig.
 
-Use this mode if you want to run the code on your host machine while connecting to a remote cluster.
-
-#### 1. Clone & Setup
 ```bash
+# Clone
 git clone https://github.com/YOUR_USERNAME/OnCallBench.git
 cd OnCallBench
-```
 
-#### 2. Run Backend
-```bash
+# Backend
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate    # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-cp .env.example .env
-# Edit .env and add your GOOGLE_API_KEY
-
+cp .env.example .env        # Add your GOOGLE_API_KEY
 python src/api.py
+
+# Frontend (new terminal)
+cd gui && npm install && npm run dev
 ```
 
-#### 3. Run Frontend
-```bash
-cd gui
-npm install
-npm run dev
-```
-Navigate to `http://localhost:5173`.
+Open **http://localhost:5173** → Select a namespace → Start diagnosing.
 
 ---
 
@@ -148,29 +212,30 @@ Navigate to `http://localhost:5173`.
 ```
 OnCallBench/
 ├── src/
-│   ├── api.py          # FastAPI backend (main API server)
-│   ├── agent.py        # AI agent logic
-│   ├── collector.py    # K8s data collection
-│   ├── evaluator.py    # LLM-as-a-Judge scoring
-│   ├── injector.py     # Chaos injection logic
-│   └── main.py         # CLI entry point
+│   ├── api.py              # FastAPI backend — REST API + startup hooks
+│   ├── agent.py            # AI agent — multi-turn Gemini tool-calling
+│   ├── event_watcher.py    # Proactive anomaly detection (Watch API)
+│   ├── k8s_service.py      # Kubernetes client — pods, events, topology
+│   ├── evaluator.py        # LLM-as-a-Judge scoring pipeline
+│   ├── injector.py         # Chaos injection engine
+│   ├── utils.py            # JSON repair, kubectl command preparation
+│   └── prompt_templates/
+│       └── k8s_system_prompt.txt  # AI agent persona & safety rules
 ├── gui/
-│   ├── src/
-│   │   ├── App.jsx     # Main React application
-│   │   ├── index.css   # Design system & theme
-│   │   └── main.jsx    # React entry point
-│   └── index.html      # HTML template
-├── scenarios/
-│   ├── crashloop/      # CrashLoopBackOff scenario
-│   ├── oomkill/        # OOMKilled scenario
-│   ├── imagepull/      # ImagePullBackOff scenario
-│   ├── dns/            # DNS resolution failure
-│   ├── netpolicy/      # Network policy blocking
-│   └── readiness/      # Readiness probe failure
-├── data/               # Generated reports & predictions
-├── .env                # API keys (not committed)
-├── requirements.txt    # Python dependencies
-└── README.md
+│   └── src/
+│       ├── App.jsx         # Main React application (1900+ lines)
+│       └── components/
+│           ├── AlertPanel.jsx     # Proactive alert notifications
+│           ├── WorkloadsTab.jsx   # Deployment/StatefulSet/DaemonSet view
+│           ├── EventsTab.jsx      # Event timeline with filtering
+│           ├── NetworkingTab.jsx  # Services, Ingresses, NetworkPolicies
+│           ├── TopologyTab.jsx    # Interactive dependency graph
+│           └── ChatPanel.jsx      # AI chat interface (v2)
+├── scenarios/              # 9 failure scenarios with ground truth
+├── k8s/
+│   └── deploy.yaml         # Full K8s deployment manifest
+├── requirements.txt        # Pinned Python dependencies
+└── docs/screenshots/       # Product screenshots
 ```
 
 ---
@@ -178,12 +243,28 @@ OnCallBench/
 ## 🔧 Tech Stack
 
 | Layer | Technology |
-|---|---|
-| **Frontend** | React 18, Vite, Tailwind CSS, Framer Motion, Lucide Icons |
-| **Backend** | FastAPI, Python, Kubernetes Python Client |
-| **AI Engine** | Google Gemini 2.0 Flash |
-| **Scoring** | LLM-as-a-Judge evaluation pipeline |
-| **Infrastructure** | Kubernetes, kubectl |
+|-------|-----------|
+| **Frontend** | React 18, Vite, Tailwind CSS, Framer Motion, Lucide React |
+| **Backend** | FastAPI, Python 3.10+, Kubernetes Python Client |
+| **AI Engine** | Google Gemini 2.0 Flash (multi-turn tool calling) |
+| **Scoring** | LLM-as-a-Judge automated evaluation |
+| **Monitoring** | K8s Watch API, background health checker |
+| **Deployment** | Docker, Kubernetes, Nginx |
+
+---
+
+## 🗺️ Roadmap
+
+- [x] Multi-turn AI agent with 6 investigation tools
+- [x] 9 failure scenarios with automated scoring
+- [x] Proactive event watcher with auto-resolve
+- [x] Topology visualization
+- [x] Self-correcting fix loop
+- [ ] Slack / PagerDuty integration
+- [ ] Incident history database
+- [ ] Multi-cluster support
+- [ ] AI chat interface (built, not yet exposed)
+- [ ] Predictive warnings (trend analysis)
 
 ---
 
@@ -193,4 +274,8 @@ MIT License — see [LICENSE](./LICENSE) for details.
 
 ---
 
-**Built with ☕ and too many on-call pages.**
+<p align="center">
+  <strong>Built for SREs who'd rather fix problems than fight tools.</strong>
+  <br />
+  <sub>Star ⭐ if this saves you from a 3 AM kubectl session.</sub>
+</p>

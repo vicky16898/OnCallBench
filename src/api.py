@@ -21,8 +21,10 @@ from k8s_service import (
     K8S_MODE, get_namespaces_logic, get_pods_logic, get_deployments_logic,
     get_statefulsets_logic, get_daemonsets_logic, get_events_logic,
     get_services_logic, get_ingresses_logic, get_network_policies_logic,
-    get_topology_logic, get_stats_logic, gather_pod_data_for_diagnosis
+    get_topology_logic, get_stats_logic, gather_pod_data_for_diagnosis,
+    v1 as k8s_v1, apps_v1 as k8s_apps_v1, _init_k8s_clients
 )
+from event_watcher import EventWatcher
 
 load_dotenv()
 
@@ -34,6 +36,9 @@ import threading
 
 app = FastAPI(title="OnCallBench AI Debugger API")
 injection_lock = threading.Lock()
+
+# Proactive Event Watcher — initialized on startup
+event_watcher: EventWatcher = None
 
 # Enable CORS for the GUI
 app.add_middleware(
@@ -60,14 +65,54 @@ else:
 BASE_DIR = Path(__file__).resolve().parent.parent
 SCENARIOS_DIR = BASE_DIR / "scenarios"
 
+@app.on_event("startup")
+def start_event_watcher():
+    """Start the proactive event watcher on server boot."""
+    global event_watcher
+    try:
+        _init_k8s_clients()  # ensure K8s clients are ready
+        from k8s_service import v1 as fresh_v1, apps_v1 as fresh_apps_v1
+        event_watcher = EventWatcher(fresh_v1, fresh_apps_v1)
+        event_watcher.start()
+    except Exception as e:
+        print(f"[Startup] Event watcher failed to start: {e}")
+
 @app.get("/health")
 def health_check():
+    active_alerts = event_watcher.get_active_count() if event_watcher else 0
     return {
         "status": "healthy",
         "k8s_mode": K8S_MODE,
         "ai_ready": GOOGLE_API_KEY is not None,
-        "scenarios_count": len(list(SCENARIOS_DIR.glob("*")))
+        "scenarios_count": len(list(SCENARIOS_DIR.glob("*"))),
+        "active_alerts": active_alerts
     }
+
+# ── Alert Routes (Proactive Watcher) ─────────────────────────────
+
+@app.get("/alerts")
+def get_alerts(include_dismissed: bool = False):
+    """Return proactive alerts from the event watcher."""
+    if not event_watcher:
+        return []
+    return event_watcher.get_alerts(include_dismissed=include_dismissed)
+
+@app.post("/alerts/{alert_id}/dismiss")
+def dismiss_alert(alert_id: str):
+    """Dismiss a single alert."""
+    if not event_watcher:
+        raise HTTPException(status_code=503, detail="Event watcher not active")
+    if event_watcher.dismiss_alert(alert_id):
+        return {"status": "dismissed"}
+    raise HTTPException(status_code=404, detail="Alert not found")
+
+@app.post("/alerts/dismiss-all")
+def dismiss_all_alerts():
+    """Dismiss all active alerts."""
+    if not event_watcher:
+        raise HTTPException(status_code=503, detail="Event watcher not active")
+    event_watcher.dismiss_all()
+    return {"status": "all_dismissed"}
 
 @app.get("/info")
 def get_info():

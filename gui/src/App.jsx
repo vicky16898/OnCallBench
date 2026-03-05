@@ -32,6 +32,7 @@ import WorkloadsTab from './components/WorkloadsTab';
 import EventsTab from './components/EventsTab';
 import NetworkingTab from './components/NetworkingTab';
 import TopologyTab from './components/TopologyTab';
+import AlertPanel from './components/AlertPanel';
 
 const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:8000';
 const api = axios.create({ baseURL: API_BASE, timeout: 120000 });
@@ -135,10 +136,11 @@ function App() {
     }, [selectedPod, statsDetail]);
 
     // Fetch dashboard overview data for new tabs
-    const fetchDashboardOverview = useCallback(async (ns) => {
+    // silent=true means background refresh — no loading skeleton flicker
+    const fetchDashboardOverview = useCallback(async (ns, { silent = false } = {}) => {
         const namespace = ns || selectedNS;
         if (!namespace) return;
-        setDashOverviewLoading(true);
+        if (!silent) setDashOverviewLoading(true);
         try {
             const [depRes, ssRes, dsRes, evtRes, svcRes, ingRes, npRes] = await Promise.allSettled([
                 api.get(`/namespaces/${namespace}/deployments`),
@@ -159,23 +161,24 @@ function App() {
         } catch (err) {
             console.error('Dashboard overview fetch error', err);
         } finally {
-            setDashOverviewLoading(false);
+            if (!silent) setDashOverviewLoading(false);
         }
     }, [api, selectedNS]);
 
-    // Auto-refresh live data every 6s when viewing active monitoring tabs
+    // Auto-refresh live data every 30s when viewing active monitoring tabs
+    // Uses silent=true so the UI never flashes loading skeletons
     const autoRefreshRef = useRef(null);
     useEffect(() => {
         const liveTabs = ['dashboard', 'workloads', 'pods', 'events', 'networking'];
         if (liveTabs.includes(activeTab) && selectedNS) {
             autoRefreshRef.current = setInterval(() => {
-                // Background refresh – doesn't clear state, just updates it
+                // Silent background refresh — data updates in-place, no flicker
                 fetchPods(selectedNS);
-                handleRefreshStats(selectedNS);
+                handleRefreshStats(selectedNS, { silent: true });
                 if (['dashboard', 'workloads', 'networking', 'events'].includes(activeTab)) {
-                    fetchDashboardOverview(selectedNS);
+                    fetchDashboardOverview(selectedNS, { silent: true });
                 }
-            }, 6000);
+            }, 30000);
         }
         return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
     }, [activeTab, selectedNS, fetchDashboardOverview]);
@@ -241,18 +244,21 @@ function App() {
         }
     };
 
-    const handleRefreshStats = async (ns = selectedNS) => {
-        setStatsLoading(true);
-        setStatsError(null);
+    // silent=true: background refresh — update data in-place without showing loading skeletons
+    const handleRefreshStats = async (ns = selectedNS, { silent = false } = {}) => {
+        if (!silent) {
+            setStatsLoading(true);
+            setStatsError(null);
+        }
         try {
             const res = await api.get('/stats', { params: { namespace: ns } });
             setStats(res.data);
             setLastRefreshed(new Date());
         } catch (err) {
             console.error("Stats fetch failed", err);
-            setStatsError(err.message);
+            if (!silent) setStatsError(err.message);
         } finally {
-            setStatsLoading(false);
+            if (!silent) setStatsLoading(false);
         }
     };
 
@@ -685,6 +691,30 @@ function App() {
                                 {stats && stats.unhealthy_pods > 0 ? `${stats.unhealthy_pods} Unhealthy` : 'Cluster Healthy'}
                             </span>
                         </div>
+                        <AlertPanel
+                            api={api}
+                            onDiagnose={(podName, namespace) => {
+                                const ns = namespace || selectedNS;
+                                setSelectedNS(ns);
+                                setActiveTab('pods');
+                                // Set partial pod for immediate drawer open
+                                const partialPod = {
+                                    name: podName,
+                                    status: 'Unknown',
+                                    is_healthy: false,
+                                    restarts: '-',
+                                    age: new Date().toISOString()
+                                };
+                                setSelectedPod(partialPod);
+                                runDiagnosis(podName);
+                                // Sync with real pod data
+                                setTimeout(async () => {
+                                    const freshPods = await fetchPods(ns);
+                                    const realPod = freshPods.find(p => p.name === podName);
+                                    if (realPod) setSelectedPod(realPod);
+                                }, 500);
+                            }}
+                        />
                         <button
                             onClick={async () => {
                                 setRefreshing(true);

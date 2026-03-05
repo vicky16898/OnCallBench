@@ -1,1 +1,1 @@
-{"configmap": ["missing-configmap"]}
+{"configmap": ["missing-configmap"], "secret": ["db-credentials"]}
