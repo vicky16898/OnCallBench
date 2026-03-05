@@ -1,0 +1,17 @@
+{
+    "scenario_id": "liveness",
+    "name": "Liveness Probe Missing Health File",
+    "difficulty": "easy",
+    "category": "probes",
+    "version": "1.0",
+    "expected_symptoms": [
+        "Pod restarts frequently (CrashLoopBackOff)",
+        "Liveness probe failed: cat: can't open '/tmp/healthy': No such file or directory",
+        "Container also exits on its own after 5 seconds"
+    ],
+    "root_cause": "The liveness probe checks for /tmp/healthy using 'cat', but this file is never created. Additionally, the container command exits after 5 seconds. Both issues cause the pod to restart continuously.",
+    "fix_steps": "Fix the container command to run a long-lived process and create the health file: command: ['sh', '-c', 'touch /tmp/healthy && sleep 3600']",
+    "confirm_commands": [
+        "kubectl get pod -l app=liveness -n oncall-bench -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}'"
+    ]
+}

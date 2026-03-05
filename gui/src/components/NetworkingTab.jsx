@@ -35,15 +35,22 @@ export default function NetworkingTab({ api, selectedNS }) {
 
     useEffect(() => { fetchNetworking(); }, [fetchNetworking]);
 
-    const formatAge = (ageStr) => {
+    const formatAge = (creationTimestamp) => {
+        if (!creationTimestamp || creationTimestamp === 'None') return 'N/A';
         try {
-            const diff = Date.now() - new Date(ageStr).getTime();
-            const hours = Math.floor(diff / 3600000);
-            const days = Math.floor(hours / 24);
-            if (days > 0) return `${days}d`;
-            if (hours > 0) return `${hours}h`;
-            return `${Math.floor(diff / 60000)}m`;
-        } catch { return '–'; }
+            const created = new Date(creationTimestamp);
+            if (isNaN(created.getTime())) return 'N/A';
+            const diff = Date.now() - created.getTime();
+            const secs = Math.floor(diff / 1000);
+            if (secs < 60) return `${secs}s`;
+            const mins = Math.floor(secs / 60);
+            if (mins < 60) return `${mins}m`;
+            const hours = Math.floor(mins / 60);
+            if (hours < 24) return `${hours}h`;
+            return `${Math.floor(hours / 24)}d`;
+        } catch (e) {
+            return 'N/A';
+        }
     };
 
     return (

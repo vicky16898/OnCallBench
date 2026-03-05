@@ -7,10 +7,10 @@ from dotenv import load_dotenv
 # Load environment variables from .env
 load_dotenv()
 
-from .injector import inject_scenario, cleanup_namespace, run_kubectl
-from .collector import collect_evidence
-from .agent import DebuggerAgent
-from .evaluator import Evaluator
+from injector import inject_scenario, cleanup_namespace, run_kubectl
+from collector import collect_evidence
+from agent import DebuggerAgent
+from evaluator import Evaluator
 
 app = typer.Typer(help="OnCallBench: K8s Incident Simulator + AI Debugger")
 console = Console()

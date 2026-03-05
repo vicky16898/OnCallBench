@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pending-app
+  namespace: oncall-bench
+  labels:
+    app: pending
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pending
+  template:
+    metadata:
+      labels:
+        app: pending
+    spec:
+      containers:
+      - name: app
+        image: nginx:latest
+        resources:
+          requests:
+            cpu: "8"        # Request 8 CPU cores — impossible on Minikube
+            memory: "32Gi"  # Request 32 GiB of memory — far exceeds node capacity
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pending-svc
+  namespace: oncall-bench
+spec:
+  selector:
+    app: pending
+  ports:
+  - port: 80
+    targetPort: 80

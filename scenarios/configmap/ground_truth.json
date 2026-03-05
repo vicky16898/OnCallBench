@@ -1,0 +1,17 @@
+{
+    "scenario_id": "configmap",
+    "name": "Missing ConfigMap Reference",
+    "difficulty": "easy",
+    "category": "configuration",
+    "version": "1.0",
+    "expected_symptoms": [
+        "Pod stuck in ContainerCreating",
+        "Event: configmap 'missing-configmap' not found"
+    ],
+    "root_cause": "The deployment references a ConfigMap named 'missing-configmap' that does not exist in the namespace. The pod fails to start with CreateContainerConfigError because the environment variable source is missing.",
+    "fix_steps": "Create the missing ConfigMap: kubectl create configmap missing-configmap --from-literal=app.conf='# app config' -n oncall-bench",
+    "fix_hint": "Do NOT try to patch the deployment. Simply create the missing ConfigMap with the expected key 'app.conf'.",
+    "confirm_commands": [
+        "kubectl get pod -l app=configmap -n oncall-bench -o jsonpath='{.items[0].status.phase}'"
+    ]
+}

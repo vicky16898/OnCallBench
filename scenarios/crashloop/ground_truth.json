@@ -1,6 +1,9 @@
 {
     "scenario_id": "crashloop",
     "name": "CrashLoopBackOff due to Bad Command",
+    "difficulty": "easy",
+    "category": "container",
+    "version": "1.0",
     "expected_symptoms": [
         "Pod status: CrashLoopBackOff",
         "Container exit code: 1"

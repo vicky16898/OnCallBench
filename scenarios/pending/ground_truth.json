@@ -1,0 +1,18 @@
+{
+    "scenario_id": "pending",
+    "name": "Pod Stuck in Pending (Insufficient Resources)",
+    "difficulty": "medium",
+    "category": "scheduling",
+    "version": "1.1",
+    "expected_symptoms": [
+        "Pod status: Pending",
+        "Event: 0/N nodes are available: insufficient cpu, insufficient memory",
+        "Pod never gets scheduled to a node"
+    ],
+    "root_cause": "The pod is requesting 8 CPU cores and 32Gi of memory, which exceeds the capacity of any node in the cluster. The scheduler cannot find a suitable node.",
+    "fix_steps": "Reduce the resource requests to reasonable values, e.g., cpu: '100m' and memory: '128Mi'.",
+    "fix_hint": "Use kubectl patch to update the Deployment resource requests. Example: kubectl patch deployment pending-app -n oncall-bench --type strategic -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"app\",\"resources\":{\"requests\":{\"cpu\":\"100m\",\"memory\":\"128Mi\"}}}]}}}}'",
+    "confirm_commands": [
+        "kubectl get pod -l app=pending -n oncall-bench -o jsonpath='{.items[0].status.phase}'"
+    ]
+}

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: configmap-app
+  namespace: oncall-bench
+  labels:
+    app: configmap
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: configmap
+  template:
+    metadata:
+      labels:
+        app: configmap
+    spec:
+      containers:
+      - name: app
+        image: busybox
+        command: ["sh", "-c", "echo Config: $APP_CONFIG && sleep 3600"]
+        env:
+        - name: APP_CONFIG
+          valueFrom:
+            configMapKeyRef:
+              name: missing-configmap
+              key: app.conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: configmap-svc
+  namespace: oncall-bench
+spec:
+  selector:
+    app: configmap
+  ports:
+  - port: 80
+    targetPort: 80

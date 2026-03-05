@@ -1,6 +1,9 @@
 {
     "scenario_id": "oomkill",
     "name": "OOMKilled due to Memory Limits",
+    "difficulty": "medium",
+    "category": "resources",
+    "version": "1.0",
     "expected_symptoms": [
         "Pod status: OOMKilled",
         "Last State: Terminated with reason OOMKilled"

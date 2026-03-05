@@ -62,6 +62,10 @@ def _repair_json(s):
         result.append('}' if opener == '{' else ']')
     
     repaired = ''.join(result)
+    
+    # Clean up common AI artifacts in JSON
+    repaired = repaired.replace(": True", ": true").replace(": False", ": false").replace(": None", ": null")
+    
     try:
         return _json.dumps(_json.loads(repaired))
     except (ValueError, _json.JSONDecodeError):
@@ -77,69 +81,204 @@ def _repair_json(s):
     return None
 
 
+def extract_json_from_text(text):
+    """Robustly extracts and parses JSON from a string, handles markdown and malformed content."""
+    if not text:
+        return None
+        
+    # 1. Try simple json.loads
+    try:
+        return json.loads(text.strip())
+    except:
+        pass
+        
+    # 2. Try to find JSON block via markdown tags
+    import re
+    json_block = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+    if json_block:
+        candidate = json_block.group(1).strip()
+        repaired = _repair_json(candidate)
+        if repaired:
+            try: return json.loads(repaired)
+            except: pass
+            
+    # 3. Try any backtick block
+    any_block = re.search(r'```\s*(.*?)\s*```', text, re.DOTALL)
+    if any_block:
+        candidate = any_block.group(1).strip()
+        repaired = _repair_json(candidate)
+        if repaired:
+            try: return json.loads(repaired)
+            except: pass
+            
+    # 4. Find first { or [ and last } or ]
+    brace_match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
+    if brace_match:
+        candidate = brace_match.group(1).strip()
+        repaired = _repair_json(candidate)
+        if repaired:
+            try: return json.loads(repaired)
+            except: pass
+            
+    return None
+
+
 def _prepare_kubectl_command(cmd):
     """
     Platform-agnostic kubectl command preparation.
-    For patch commands: extracts JSON, repairs, writes to --patch-file.
-    For other commands: cleans shell quotes and returns arg list.
-    Returns: (args_list, temp_file_path_or_None)
+    Now correctly handles flags that appear AFTER the JSON patch.
     """
     import tempfile
     import json as _json
+    import re
     
     temp_path = None
-    has_patch_flag = ("-p " in cmd or "-p'" in cmd or '-p"' in cmd
-                      or "--patch " in cmd or "--patch=" in cmd)
-    is_patch = "patch" in cmd.lower() and has_patch_flag
+    cmd_lower = cmd.lower()
+    has_patch_flag = ("-p " in cmd_lower or "-p'" in cmd_lower or '-p"' in cmd_lower
+                      or "--patch " in cmd_lower or "--patch=" in cmd_lower)
+    is_patch = "patch" in cmd_lower and has_patch_flag
     
-    if is_patch:
-        # Strip all single quotes (shell-only, never valid JSON)
-        cmd_clean = cmd.replace("'", "")
+    # 1. Identify Heredocs (<<EOF pattern)
+    # This is a common AI pattern for multi-line YAML files that fails on Windows.
+    heredoc_pattern = re.compile(r'<<-?\s*([\'"]?)([a-zA-Z0-9_-]+)\1\s*\n(.*?)\n\s*\2', re.DOTALL | re.IGNORECASE)
+    hd_match = heredoc_pattern.search(cmd)
+    
+    if hd_match:
+        content = hd_match.group(3)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', encoding='utf-8', delete=False) as f:
+            f.write(content)
+            temp_path = f.name
         
-        brace_idx = cmd_clean.find('{')
-        bracket_idx = cmd_clean.find('[')
+        # Replace the heredoc with the temp file path in the command
+        # If it was 'cat <<EOF ... EOF | kubectl apply -f -', we can simplify to 'kubectl apply -f temp_path'
+        # or more robustly: replace 'cat <<EOF...EOF' with 'type temp_path' on Windows or 'cat temp_path' elsewhere.
         
-        if bracket_idx != -1 and (brace_idx == -1 or bracket_idx < brace_idx):
-            start_idx = bracket_idx
-        elif brace_idx != -1:
-            start_idx = brace_idx
+        hd_full = hd_match.group(0)
+        new_cmd = cmd.replace(hd_full, "").strip()
+        
+        # If the command had 'cat |', clean it up
+        new_cmd = re.sub(r'^cat\s*\|\s*', '', new_cmd)
+        
+        # If it uses -f -, change to -f temp_path
+        if "-f -" in new_cmd:
+            new_cmd = new_cmd.replace("-f -", f"-f {temp_path}")
+        elif "--filename -" in new_cmd:
+            new_cmd = new_cmd.replace("--filename -", f"--filename {temp_path}")
         else:
-            start_idx = -1
+            # If not using -f -, maybe it was just a pipe?
+            # Reconstruct cleverly
+            new_cmd = f"{new_cmd} -f {temp_path}" if "apply" in new_cmd else f"{new_cmd} {temp_path}"
         
-        if start_idx != -1:
-            raw_json = cmd_clean[start_idx:].rstrip()
-            clean = raw_json.replace('\\"', '"').replace('\\\\', '\\')
+        try:
+            args = shlex.split(new_cmd)
+        except ValueError:
+            args = new_cmd.split()
             
-            repaired = _repair_json(clean) or _repair_json(raw_json)
+        print(f"[HEREDOC REWRITE] {cmd[:50]}... -> {new_cmd}")
+        return args, temp_path
+
+    # 2. Existing patch logic
+    if is_patch:
+        # 1. Identify JSON start
+        brace_idx = cmd.find('{')
+        bracket_idx = cmd.find('[')
+        start_idx = -1
+        if brace_idx != -1 and (bracket_idx == -1 or brace_idx < bracket_idx):
+            start_idx = brace_idx
+        elif bracket_idx != -1:
+            start_idx = bracket_idx
+
+        if start_idx != -1:
+            # 2. Extract JSON by balancing braces/brackets
+            stack = []
+            end_idx = -1
+            in_str = False
+            for i in range(start_idx, len(cmd)):
+                char = cmd[i]
+                if char == '"' and (i == 0 or cmd[i-1] != '\\'):
+                    in_str = not in_str
+                if in_str: continue
+                
+                if char in '{[': stack.append(char)
+                elif char in '}]':
+                    if stack: stack.pop()
+                    if not stack:
+                        end_idx = i + 1
+                        break
+            
+            if end_idx == -1:
+                # Fallback: Extraction failed to balance. Try to find the next boundary (-- flag, | pipe, or ending quote)
+                # This happens if the AI misses closing braces.
+                boundary_match = re.search(r'\s+(-[a-zA-Z]|--|\|)', cmd[start_idx:])
+                if boundary_match:
+                    end_idx = start_idx + boundary_match.start()
+                else:
+                    # If we find a trailing quote, use that as the boundary
+                    trailing_quote = re.search(r"['\"](?:\s*|$)", cmd[start_idx:])
+                    if trailing_quote:
+                        end_idx = start_idx + trailing_quote.start()
+                    else:
+                        end_idx = len(cmd)
+
+            raw_json = cmd[start_idx:end_idx].strip()
+            # If the raw_json still has a trailing quote, trim it
+            if raw_json.endswith("'") or raw_json.endswith('"'):
+                raw_json = raw_json[:-1].strip()
+                
+            prefix = cmd[:start_idx].strip()
+            suffix = cmd[end_idx:].strip()
+            
+            # Clean quotes from prefix/suffix
+            if prefix.endswith("'") or prefix.endswith('"'): prefix = prefix[:-1].rstrip()
+            if suffix.startswith("'") or suffix.startswith('"'): suffix = suffix[1:].lstrip()
+
+            prefix = re.sub(r'(-p|--patch)$', '', prefix).strip()
+            
+            # Aggressively repair
+            clean_json = raw_json.replace("'", '"')
+            repaired = _repair_json(clean_json) or _repair_json(raw_json)
             
             if repaired:
-                if "--type=json" in cmd:
-                    parsed = _json.loads(repaired)
-                    if isinstance(parsed, dict):
-                        repaired = _json.dumps([parsed])
-                
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json',
-                                                  encoding='utf-8', delete=False) as f:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', encoding='utf-8', delete=False) as f:
                     f.write(repaired)
                     temp_path = f.name
                 
-                # Build args list directly — never pass file paths through shlex
-                # (shlex treats backslashes as escape chars, breaking Windows paths)
-                patch_match = re.search(r'(-p|--patch)\s*', cmd_clean)
-                prefix = (cmd_clean[:patch_match.start()].strip()
-                          if patch_match else cmd_clean[:start_idx].strip())
-                prefix_args = shlex.split(prefix)  # safe: no file paths here
-                args = prefix_args + [f'--patch-file={temp_path}']
-                
-                print(f"[CMD] Patch rewritten -> {' '.join(args)}")
+                # Using separate args for flag and path is much safer for list2cmdline
+                args = shlex.split(prefix) + ['--patch-file', temp_path] + shlex.split(suffix)
+                print(f"[REWRITE] {cmd} -> {args}")
                 return args, temp_path
-            else:
-                print(f"[CMD] WARN: JSON repair failed, attempting raw execution")
-    
-    # Non-patch (or patch fallback): clean quotes and split
+
+    # Non-patch (or fix failed): standard split
     try:
         args = shlex.split(cmd)
     except ValueError:
         args = shlex.split(cmd.replace("'", ""))
     
     return args, temp_path
+
+
+def clean_k8s_object(obj):
+    """Recursively removes 'managedFields', 'status', and other noise from K8s dictionaries."""
+    if not isinstance(obj, dict):
+        if isinstance(obj, list):
+            return [clean_k8s_object(i) for i in obj]
+        return obj
+
+    # Fields to drop
+    to_drop = {
+        'managedFields', 'status', 'ownerReferences', 'uid', 
+        'resourceVersion', 'generation', 'selfLink', 
+        'creationTimestamp', 'deletionTimestamp', 'progressDeadlineSeconds'
+    }
+    
+    cleaned = {}
+    for k, v in obj.items():
+        if k in to_drop:
+            continue
+        
+        # Recurse
+        cleaned_v = clean_k8s_object(v)
+        if cleaned_v is not None:
+            cleaned[k] = cleaned_v
+            
+    return cleaned

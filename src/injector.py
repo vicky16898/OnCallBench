@@ -29,4 +29,4 @@ def inject_scenario(scenario_id: str):
 
 def cleanup_namespace(namespace: str = "oncall-bench"):
     console.print(f"Cleaning up namespace {namespace}...")
-    run_kubectl(["delete", "all", "--all", "-n", namespace])
+    run_kubectl(["delete", "all,configmap,secret,netpol,hpa,ingress,pod", "--all", "-n", namespace, "--timeout=10s", "--wait=false"])

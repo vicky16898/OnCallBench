@@ -34,7 +34,7 @@ import NetworkingTab from './components/NetworkingTab';
 import TopologyTab from './components/TopologyTab';
 
 const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:8000';
-const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
+const api = axios.create({ baseURL: API_BASE, timeout: 120000 });
 
 function App() {
     const [activeTab, setActiveTab] = useState('dashboard');
@@ -43,6 +43,7 @@ function App() {
     const [selectedNS, setSelectedNS] = useState(null);
     const [pods, setPods] = useState([]);
     const [scenarios, setScenarios] = useState([]);
+    const [difficultyFilter, setDifficultyFilter] = useState('all');
     const [stats, setStats] = useState(null);
     const [statsLoading, setStatsLoading] = useState(true);
     const [statsError, setStatsError] = useState(null);
@@ -97,6 +98,24 @@ function App() {
         }
     }, [selectedNS]);
 
+    const formatAge = (creationTimestamp) => {
+        if (!creationTimestamp || creationTimestamp === 'None') return 'N/A';
+        try {
+            const created = new Date(creationTimestamp);
+            if (isNaN(created.getTime())) return 'N/A';
+            const diff = Date.now() - created.getTime();
+            const secs = Math.floor(diff / 1000);
+            if (secs < 60) return `${secs}s`;
+            const mins = Math.floor(secs / 60);
+            if (mins < 60) return `${mins}m`;
+            const hours = Math.floor(mins / 60);
+            if (hours < 24) return `${hours}h`;
+            return `${Math.floor(hours / 24)}d`;
+        } catch (e) {
+            return 'N/A';
+        }
+    };
+
     // Keyboard shortcut: Escape closes overlays (stats detail first, then drawer)
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -144,16 +163,19 @@ function App() {
         }
     }, [api, selectedNS]);
 
-    // Auto-refresh dashboard every 30s
+    // Auto-refresh live data every 6s when viewing active monitoring tabs
     const autoRefreshRef = useRef(null);
     useEffect(() => {
-        if (activeTab === 'dashboard' && selectedNS) {
+        const liveTabs = ['dashboard', 'workloads', 'pods', 'events', 'networking'];
+        if (liveTabs.includes(activeTab) && selectedNS) {
             autoRefreshRef.current = setInterval(() => {
-                setStatsDetail(null); // close stale popover before refresh
+                // Background refresh – doesn't clear state, just updates it
                 fetchPods(selectedNS);
                 handleRefreshStats(selectedNS);
-                fetchDashboardOverview(selectedNS);
-            }, 30000);
+                if (['dashboard', 'workloads', 'networking', 'events'].includes(activeTab)) {
+                    fetchDashboardOverview(selectedNS);
+                }
+            }, 6000);
         }
         return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
     }, [activeTab, selectedNS, fetchDashboardOverview]);
@@ -239,21 +261,62 @@ function App() {
         setInjectResult(null);
         try {
             const res = await api.post(`/inject/${id}`);
+            if (res.data.status === 'warning') {
+                setInjectResult({ type: 'warning', message: res.data.message });
+                return;
+            }
             setInjectResult({ type: 'success', message: res.data?.message || `Scenario ${id} injected successfully` });
-            // Poll multiple times to allow K8s to reconcile pod state
-            // (a single delayed fetch often misses transitional states like ImagePull)
-            const pollIntervals = [2000, 5000, 10000];
-            pollIntervals.forEach((delay) => {
-                setTimeout(() => {
-                    fetchPods(selectedNS);
-                    handleRefreshStats();
-                }, delay);
-            });
+
+            // Switch to oncall-bench namespace so the user sees the injected scenario
+            setSelectedNS('oncall-bench');
+            setActiveTab('workloads');
+
+            // Aggressive polling: K8s needs time to pull images and start containers
+            [2000, 5000, 8000, 12000].forEach(delay => setTimeout(() => {
+                fetchPods('oncall-bench');
+                handleRefreshStats('oncall-bench');
+                fetchDashboardOverview('oncall-bench');
+            }, delay));
         } catch (err) {
-            console.error(err);
             setInjectResult({ type: 'error', message: err.response?.data?.detail || err.message || 'Injection failed' });
-        }
-        finally { setInjecting(null); }
+        } finally { setInjecting(null); }
+    };
+
+    const handleResetSandbox = async () => {
+        if (!window.confirm("Nuclear Reset: This will delete the entire 'oncall-bench' namespace and all resources within it. Continue?")) return;
+        setRefreshing(true);
+        setInjectResult({ type: 'info', message: "Performing full sandbox reset... Please wait." });
+        try {
+            const res = await api.post('/reset-sandbox');
+            setInjectResult({ type: 'success', message: res.data.message });
+
+            // Clear local state immediately so the UI reflects the reset
+            setPods([]);
+            setDashDeployments([]);
+            setDashStatefulsets([]);
+            setDashDaemonsets([]);
+            setDashEvents([]);
+            setDashServices([]);
+            setDashIngresses([]);
+            setDashNetpolicies([]);
+
+            // Re-fetch namespaces (the old one was deleted & recreated)
+            try {
+                const nsRes = await api.get('/namespaces');
+                setNamespaces(nsRes.data || []);
+            } catch (e) { }
+
+            setSelectedNS('oncall-bench');
+
+            // Aggressive refresh after reset
+            [2000, 5000, 8000].forEach(delay => setTimeout(() => {
+                fetchPods('oncall-bench');
+                handleRefreshStats('oncall-bench');
+                fetchDashboardOverview('oncall-bench');
+            }, delay));
+        } catch (err) {
+            setInjectResult({ type: 'error', message: err.response?.data?.detail || "Full reset failed" });
+        } finally { setRefreshing(false); }
     };
 
     const runDiagnosis = async (podName) => {
@@ -263,6 +326,20 @@ function App() {
         try {
             const res = await api.post('/diagnose', { namespace: selectedNS, pod_name: podName });
             setDiagnosis(res.data);
+
+            // Auto-evaluate: score this diagnosis against ground truth in the background
+            try {
+                await api.post('/evaluate', {
+                    pod_name: podName,
+                    diagnosis: res.data,
+                });
+                // Refresh benchmarks so the Benchmarks tab is up to date
+                const benchRes = await api.get('/benchmarks');
+                setBenchmarks(benchRes.data || []);
+            } catch (evalErr) {
+                // Evaluation is best-effort — don't block the diagnosis UI
+                console.log('Auto-evaluation skipped:', evalErr.response?.data?.detail || evalErr.message);
+            }
         } catch (err) {
             console.error(err);
             setDiagnosisError(err.response?.data?.detail || err.message || 'Diagnosis failed');
@@ -299,9 +376,10 @@ function App() {
             const pollDelays = [3000, 6000, 10000, 15000];
             pollDelays.forEach((delay, pollIdx) => {
                 setTimeout(async () => {
-                    // Always refresh pods & stats so the table stays current
+                    // Always refresh pods, stats, and dashboard so everything stays current
                     const refreshedPods = await fetchPods(selectedNS);
                     await handleRefreshStats();
+                    fetchDashboardOverview(selectedNS);
 
                     // Skip drawer-specific logic if the drawer was closed
                     // or a newer command started (generation mismatch)
@@ -323,6 +401,47 @@ function App() {
             setExecutionResults(prev => ({
                 ...prev,
                 [idx]: { success: false, stderr: err.response?.data?.detail || err.message }
+            }));
+        } finally {
+            setExecutingCmd(null);
+        }
+    };
+
+    const handleRetryFix = async (failedCmd, errorMsg, idx) => {
+        setExecutingCmd(idx);
+        try {
+            const res = await api.post('/retry-fix', {
+                failed_command: failedCmd,
+                error_message: errorMsg,
+                pod_name: selectedPod?.name,
+                namespace: selectedNS
+            });
+
+            if (res.data.corrected_steps && res.data.corrected_steps.length > 0) {
+                // Update the diagnosis state to replace the failed step with corrected one(s)
+                setDiagnosis(prev => {
+                    const newSteps = [...prev.fix_steps];
+                    // Replace the failed command with the first corrected one
+                    newSteps[idx] = {
+                        ...newSteps[idx],
+                        command: res.data.corrected_steps[0].command,
+                        reasoning: "AI-Corrected: " + res.data.corrected_steps[0].reasoning,
+                        label: res.data.corrected_steps[0].label
+                    };
+                    return { ...prev, fix_steps: newSteps };
+                });
+                // Clear the previous failure result so the user can see the new command
+                setExecutionResults(prev => {
+                    const next = { ...prev };
+                    delete next[idx];
+                    return next;
+                });
+            }
+        } catch (err) {
+            console.error("Retry fix failed", err);
+            setExecutionResults(prev => ({
+                ...prev,
+                [idx]: { success: false, stderr: "AI failed to correct: " + (err.response?.data?.detail || err.message) }
             }));
         } finally {
             setExecutingCmd(null);
@@ -752,7 +871,53 @@ function App() {
                                             ))}
                                         </div>
 
-                                        {/* ── New Tabs Overview Section ── */}
+                                        {/* ── Quick Stats Row ── */}
+                                        <motion.div
+                                            initial={{ opacity: 0, y: 15 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            transition={{ delay: 0.5 }}
+                                            className="grid grid-cols-2 md:grid-cols-4 gap-3"
+                                        >
+                                            {(() => {
+                                                const avgRestarts = pods.length > 0
+                                                    ? (pods.reduce((sum, p) => sum + (parseInt(p.restarts) || 0), 0) / pods.length).toFixed(1)
+                                                    : '0';
+                                                const warningEvents = dashEvents.filter(e => e.type === 'Warning');
+                                                const warningRate = dashEvents.length > 0
+                                                    ? ((warningEvents.length / dashEvents.length) * 100).toFixed(0)
+                                                    : '0';
+                                                const lastEventTime = dashEvents.length > 0
+                                                    ? (() => {
+                                                        const evt = dashEvents[0];
+                                                        const ts = evt.last_seen || evt.age || '';
+                                                        if (!ts) return 'Just now';
+                                                        try {
+                                                            const d = new Date(ts);
+                                                            if (isNaN(d.getTime())) return ts;
+                                                            const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+                                                            if (diff < 60) return `${diff}s ago`;
+                                                            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+                                                            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+                                                            return `${Math.floor(diff / 86400)}d ago`;
+                                                        } catch { return ts; }
+                                                    })()
+                                                    : 'None';
+
+                                                return [
+                                                    { label: 'Avg Restarts', value: avgRestarts, color: 'text-blue-500', bg: 'bg-blue-500/8' },
+                                                    { label: 'Warning Rate', value: `${warningRate}%`, color: warningRate > 20 ? 'text-amber-500' : 'text-emerald-500', bg: warningRate > 20 ? 'bg-amber-500/8' : 'bg-emerald-500/8' },
+                                                    { label: 'Total Events', value: dashEvents.length, color: 'text-violet-500', bg: 'bg-violet-500/8' },
+                                                    { label: 'Last Activity', value: lastEventTime, color: 'text-slate-500', bg: 'bg-slate-500/8', small: true },
+                                                ].map((item, idx) => (
+                                                    <div key={idx} className={`${item.bg} rounded-xl px-4 py-3 flex items-center gap-3`}>
+                                                        <div className={`text-lg font-bold font-outfit ${item.color} ${item.small ? 'text-xs' : ''}`}>{item.value}</div>
+                                                        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider leading-tight">{item.label}</div>
+                                                    </div>
+                                                ));
+                                            })()}
+                                        </motion.div>
+
+                                        {/* ── Cluster Resources Overview ── */}
                                         <div className="space-y-4">
                                             <h3 className="font-outfit text-lg font-bold text-foreground">Cluster Resources Overview</h3>
                                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -945,7 +1110,10 @@ function App() {
                                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                                             <div className="lg:col-span-2 bg-card rounded-2xl border border-border p-6 shadow-sm">
                                                 <div className="flex items-center justify-between mb-6">
-                                                    <h3 className="font-outfit text-lg font-bold text-foreground">Incident Activity</h3>
+                                                    <div>
+                                                        <h3 className="font-outfit text-lg font-bold text-foreground">Incident Activity</h3>
+                                                        <p className="text-[11px] text-muted-foreground mt-0.5">Event distribution by type</p>
+                                                    </div>
                                                     <div className="flex items-center gap-4">
                                                         <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> Warning</span>
                                                         <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-500 inline-block" /> Normal</span>
@@ -1039,17 +1207,38 @@ function App() {
                                                             );
                                                         }
                                                         return warnings.map((evt, i) => (
-                                                            <div key={i} className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/10 hover:border-amber-500/25 transition-colors">
+                                                            <motion.div
+                                                                key={i}
+                                                                initial={{ opacity: 0, x: 10 }}
+                                                                animate={{ opacity: 1, x: 0 }}
+                                                                transition={{ delay: i * 0.05 }}
+                                                                className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/10 hover:border-amber-500/30 hover:bg-amber-500/8 transition-all cursor-pointer group/warn"
+                                                                onClick={() => {
+                                                                    // Try to find the pod from this warning event and diagnose it
+                                                                    const podName = evt.object_name || '';
+                                                                    const matchedPod = pods.find(p => p.name === podName);
+                                                                    if (matchedPod) {
+                                                                        setActiveTab('pods');
+                                                                        setSelectedPod(matchedPod);
+                                                                        runDiagnosis(matchedPod.name);
+                                                                    } else {
+                                                                        setActiveTab('events');
+                                                                    }
+                                                                }}
+                                                            >
                                                                 <div className="flex items-center justify-between mb-1">
                                                                     <span className="text-[10px] font-bold text-amber-600 uppercase">{evt.reason}</span>
-                                                                    {evt.count > 1 && <span className="text-[9px] font-bold bg-amber-500/10 text-amber-600 px-1.5 py-0.5 rounded">×{evt.count}</span>}
+                                                                    <div className="flex items-center gap-2">
+                                                                        {evt.count > 1 && <span className="text-[9px] font-bold bg-amber-500/10 text-amber-600 px-1.5 py-0.5 rounded">×{evt.count}</span>}
+                                                                        <ChevronRight size={12} className="text-muted-foreground opacity-0 group-hover/warn:opacity-100 transition-opacity" />
+                                                                    </div>
                                                                 </div>
                                                                 <p className="text-[11px] text-foreground line-clamp-2 leading-snug">{evt.message}</p>
                                                                 <div className="flex items-center justify-between mt-1.5">
-                                                                    <span className="text-[9px] text-muted-foreground truncate max-w-[120px]">{evt.involved_object}</span>
+                                                                    <span className="text-[9px] text-muted-foreground truncate max-w-[120px] font-mono">{evt.object_name || evt.involved_object}</span>
                                                                     <span className="text-[9px] text-muted-foreground">{evt.source}</span>
                                                                 </div>
-                                                            </div>
+                                                            </motion.div>
                                                         ));
                                                     })()}
                                                 </div>
@@ -1128,7 +1317,7 @@ function App() {
                                                         </div>
                                                     </td>
                                                     <td className="py-5 text-muted-foreground tracking-tight">
-                                                        {new Date(pod.age).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                        {formatAge(pod.age)}
                                                     </td>
                                                     <td className="py-5 pr-6 text-right">
                                                         <button className="p-2 bg-card border border-border rounded-lg text-muted-foreground group-hover:text-indigo-600 group-hover:border-indigo-500/20 transition-all">
@@ -1160,78 +1349,152 @@ function App() {
 
                         {activeTab === 'scenarios' && (
                             <motion.div key="scenarios" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.35 }} className="space-y-8">
-                                <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center justify-between gap-4">
                                     <div>
                                         <h2 className="text-2xl font-bold font-outfit text-foreground">Incident Scenarios</h2>
                                         <p className="text-muted-foreground text-sm">Inject pre-defined Kubernetes failures to benchmark your AI agent's response.</p>
                                     </div>
-                                    <button
-                                        onClick={fetchInitialData}
-                                        className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground hover:text-foreground"
-                                        title="Refresh Scenarios"
-                                    >
-                                        <RefreshCw size={18} />
-                                    </button>
+                                    <div className="flex items-center gap-3">
+                                        <button
+                                            onClick={handleResetSandbox}
+                                            disabled={refreshing}
+                                            className="flex items-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-600 rounded-xl text-xs font-bold border border-red-500/20 transition-all active:scale-95 disabled:opacity-50"
+                                        >
+                                            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+                                            Reset Sandbox
+                                        </button>
+                                        <button
+                                            onClick={fetchInitialData}
+                                            className="p-2 hover:bg-muted rounded-xl transition-colors text-muted-foreground hover:text-foreground border border-transparent hover:border-border"
+                                            title="Refresh Scenarios"
+                                        >
+                                            <RefreshCw size={20} />
+                                        </button>
+                                    </div>
                                 </div>
 
-                                {/* Inject Result Toast */}
-                                <AnimatePresence>
-                                    {injectResult && (
-                                        <motion.div
-                                            initial={{ opacity: 0, y: -10 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            exit={{ opacity: 0, y: -10 }}
-                                            className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${injectResult.type === 'success'
-                                                ? 'bg-success/10 border-success/20 text-success'
-                                                : 'bg-error/10 border-error/20 text-error'
-                                                }`}
-                                        >
-                                            <div className="flex items-center gap-2">
-                                                {injectResult.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-                                                <span className="text-sm font-medium">{injectResult.message}</span>
-                                            </div>
-                                            <button onClick={() => setInjectResult(null)} className="text-xs opacity-60 hover:opacity-100">✕</button>
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
+                                {(() => {
+                                    const filteredScenarios = difficultyFilter === 'all'
+                                        ? scenarios
+                                        : scenarios.filter(s => s.difficulty === difficultyFilter);
 
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                    {scenarios.length === 0 ? (
-                                        <div className="col-span-full py-20 bg-muted/30 border border-dashed border-border rounded-3xl flex flex-col items-center justify-center text-muted-foreground">
-                                            <Zap size={48} className="mb-4 opacity-20 animate-float" />
-                                            <p>No scenarios found in the ./scenarios directory.</p>
-                                        </div>
-                                    ) : scenarios.map((sc, scIdx) => (
-                                        <motion.div
-                                            key={sc.id}
-                                            initial={{ opacity: 0, y: 30, scale: 0.9 }}
-                                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                                            transition={{ delay: scIdx * 0.1, duration: 0.45, type: 'spring', stiffness: 80 }}
-                                            className="bg-card border border-border rounded-3xl p-6 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all group flex flex-col relative overflow-hidden card-glow"
-                                        >
-                                            <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
-                                                <Zap size={64} className="text-indigo-600" />
-                                            </div>
-                                            <div className="mb-6 flex items-center justify-between">
-                                                <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-600 flex items-center justify-center">
-                                                    <AlertCircle size={24} />
+                                    return (
+                                        <>
+                                            {/* Difficulty Overview / Filters */}
+                                            {scenarios.length > 0 && (
+                                                <div className="flex items-center gap-3 flex-wrap">
+                                                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Filter:</span>
+                                                    <button
+                                                        onClick={() => setDifficultyFilter('all')}
+                                                        className={`text-[11px] font-bold px-3 py-1 rounded-full ring-1 transition-all ${difficultyFilter === 'all'
+                                                            ? 'bg-indigo-600 text-white ring-indigo-600 shadow-lg shadow-indigo-500/20'
+                                                            : 'bg-muted/50 text-muted-foreground ring-border hover:bg-muted hover:text-foreground'
+                                                            }`}
+                                                    >
+                                                        All ({scenarios.length})
+                                                    </button>
+                                                    {['easy', 'medium', 'hard'].map(d => {
+                                                        const count = scenarios.filter(s => s.difficulty === d).length;
+                                                        const colors = {
+                                                            easy: difficultyFilter === 'easy' ? 'bg-emerald-600 text-white ring-emerald-600 shadow-emerald-500/20' : 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/20 hover:bg-emerald-500/20',
+                                                            medium: difficultyFilter === 'medium' ? 'bg-amber-600 text-white ring-amber-600 shadow-amber-500/20' : 'bg-amber-500/10 text-amber-600 ring-amber-500/20 hover:bg-amber-500/20',
+                                                            hard: difficultyFilter === 'hard' ? 'bg-red-600 text-white ring-red-600 shadow-red-500/20' : 'bg-red-500/10 text-red-600 ring-red-500/20 hover:bg-red-500/20',
+                                                        };
+                                                        return count > 0 && (
+                                                            <button
+                                                                key={d}
+                                                                onClick={() => setDifficultyFilter(d)}
+                                                                className={`text-[11px] font-bold px-3 py-1 rounded-full ring-1 transition-all shadow-lg ${colors[d]}`}
+                                                            >
+                                                                {d.charAt(0).toUpperCase() + d.slice(1)} ({count})
+                                                            </button>
+                                                        );
+                                                    })}
+                                                    <span className="text-[10px] text-muted-foreground ml-auto">{filteredScenarios.length} shown</span>
                                                 </div>
-                                                <span className="text-[10px] font-bold px-2 py-1 bg-yellow-500/10 text-yellow-600 rounded-md">V1.0</span>
-                                            </div>
-                                            <h3 className="font-outfit text-xl font-bold text-foreground mb-3">{sc.name}</h3>
-                                            <p className="text-xs text-muted-foreground leading-relaxed flex-1 mb-8">{sc.description}</p>
+                                            )}
 
-                                            <button
-                                                onClick={() => injectScenario(sc.id)}
-                                                disabled={injecting === sc.id}
-                                                className="w-full py-3 bg-primary text-primary-foreground hover:bg-primary/90 rounded-2xl text-[13px] font-bold transition-all flex items-center justify-center gap-2 group shadow-md shadow-primary/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                                            >
-                                                {injecting === sc.id ? <RefreshCw size={16} className="animate-spin" /> : <Zap size={16} className="group-hover:scale-125 transition-transform" />}
-                                                {injecting === sc.id ? 'Injecting Chaos...' : 'Trigger Injection'}
-                                            </button>
-                                        </motion.div>
-                                    ))}
-                                </div>
+                                            {/* Inject Result Toast */}
+                                            <AnimatePresence>
+                                                {injectResult && (
+                                                    <motion.div
+                                                        initial={{ opacity: 0, y: -10 }}
+                                                        animate={{ opacity: 1, y: 0 }}
+                                                        exit={{ opacity: 0, y: -10 }}
+                                                        className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${injectResult.type === 'success'
+                                                            ? 'bg-success/10 border-success/20 text-success'
+                                                            : injectResult.type === 'warning'
+                                                                ? 'bg-amber-500/10 border-amber-500/20 text-amber-600'
+                                                                : injectResult.type === 'info'
+                                                                    ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-600'
+                                                                    : 'bg-error/10 border-error/20 text-error'
+                                                            }`}
+                                                    >
+                                                        <div className="flex items-center gap-2">
+                                                            {injectResult.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                                                            <span className="text-sm font-medium">{injectResult.message}</span>
+                                                        </div>
+                                                        <button onClick={() => setInjectResult(null)} className="text-xs opacity-60 hover:opacity-100">✕</button>
+                                                    </motion.div>
+                                                )}
+                                            </AnimatePresence>
+
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                                {filteredScenarios.length === 0 ? (
+                                                    <div className="col-span-full py-20 bg-muted/30 border border-dashed border-border rounded-3xl flex flex-col items-center justify-center text-muted-foreground">
+                                                        <Zap size={48} className="mb-4 opacity-20 animate-float" />
+                                                        <p>No scenarios found for this difficulty.</p>
+                                                    </div>
+                                                ) : filteredScenarios.map((sc, scIdx) => {
+                                                    const diffColors = {
+                                                        easy: { bg: 'bg-emerald-500/10', text: 'text-emerald-600', dot: 'bg-emerald-500' },
+                                                        medium: { bg: 'bg-amber-500/10', text: 'text-amber-600', dot: 'bg-amber-500' },
+                                                        hard: { bg: 'bg-red-500/10', text: 'text-red-600', dot: 'bg-red-500' },
+                                                    };
+                                                    const dc = diffColors[sc.difficulty] || diffColors.medium;
+
+                                                    return (
+                                                        <motion.div
+                                                            key={sc.id}
+                                                            initial={{ opacity: 0, y: 30, scale: 0.9 }}
+                                                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                                                            transition={{ delay: scIdx * 0.06, duration: 0.45, type: 'spring', stiffness: 80 }}
+                                                            className="bg-card border border-border rounded-3xl p-6 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all group flex flex-col relative overflow-hidden card-glow"
+                                                        >
+                                                            <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                                                                <Zap size={64} className="text-indigo-600" />
+                                                            </div>
+                                                            <div className="mb-4 flex items-center justify-between">
+                                                                <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-600 flex items-center justify-center">
+                                                                    <AlertCircle size={24} />
+                                                                </div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${dc.bg} ${dc.text}`}>
+                                                                        <span className={`w-1.5 h-1.5 rounded-full ${dc.dot}`} />
+                                                                        {sc.difficulty?.toUpperCase()}
+                                                                    </span>
+                                                                    <span className="text-[10px] font-bold px-2 py-1 bg-yellow-500/10 text-yellow-600 rounded-md">V{sc.version || '1.0'}</span>
+                                                                </div>
+                                                            </div>
+                                                            <h3 className="font-outfit text-lg font-bold text-foreground mb-2 leading-tight">{sc.name}</h3>
+                                                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-muted text-muted-foreground uppercase tracking-wider w-fit mb-3">{sc.category}</span>
+                                                            <p className="text-xs text-muted-foreground leading-relaxed flex-1 mb-6">{sc.description}</p>
+
+                                                            <button
+                                                                onClick={() => injectScenario(sc.id)}
+                                                                disabled={injecting === sc.id}
+                                                                className="w-full py-3 bg-primary text-primary-foreground hover:bg-primary/90 rounded-2xl text-[13px] font-bold transition-all flex items-center justify-center gap-2 group shadow-md shadow-primary/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                            >
+                                                                {injecting === sc.id ? <RefreshCw size={16} className="animate-spin" /> : <Zap size={16} className="group-hover:scale-125 transition-transform" />}
+                                                                {injecting === sc.id ? 'Injecting Chaos...' : 'Trigger Injection'}
+                                                            </button>
+                                                        </motion.div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </>
+                                    );
+                                })()}
                             </motion.div>
                         )}
                         {activeTab === 'benchmarks' && (
@@ -1253,33 +1516,67 @@ function App() {
                                         </button>
                                     </div>
                                 ) : (
-                                    <div className="grid grid-cols-1 gap-6">
-                                        {benchmarks.map((b, i) => (
-                                            <motion.div
-                                                key={i}
-                                                initial={{ opacity: 0, y: 20 }}
-                                                animate={{ opacity: 1, y: 0 }}
-                                                transition={{ delay: i * 0.1, duration: 0.4 }}
-                                                className="bg-card border border-border rounded-3xl p-6 shadow-sm flex flex-col md:flex-row md:items-center gap-8 group hover:border-indigo-500/30 transition-all card-glow"
-                                            >
-                                                <div className="flex-1">
-                                                    <div className="flex items-center gap-3 mb-2">
-                                                        <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-500/10 text-indigo-600 rounded uppercase">Scenario</span>
-                                                        <h4 className="font-bold text-lg text-foreground">{b.scenario_id}</h4>
-                                                    </div>
-                                                    <p className="text-xs text-muted-foreground">Evaluation completed via LLM-as-a-Judge</p>
-                                                </div>
+                                    <>
+                                        {/* Aggregate Summary */}
+                                        <motion.div
+                                            initial={{ opacity: 0, y: 10 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            className="bg-card border border-border rounded-2xl p-6 shadow-sm"
+                                        >
+                                            <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-4">Overall Performance</h3>
+                                            <div className="grid grid-cols-3 gap-6">
+                                                {(() => {
+                                                    const avg = (key) => benchmarks.length > 0
+                                                        ? benchmarks.reduce((sum, b) => sum + (b[key] || 0), 0) / benchmarks.length
+                                                        : 0;
+                                                    return [
+                                                        { label: 'Root Cause Match', value: avg('root_cause_match'), color: 'text-indigo-600' },
+                                                        { label: 'Fix Correctness', value: avg('fix_correctness'), color: 'text-indigo-600' },
+                                                        { label: 'AI Confidence', value: avg('confidence_score'), color: 'text-yellow-500' },
+                                                    ].map((m, i) => (
+                                                        <BenchmarkMetric key={i} label={m.label} value={m.value} color={m.color} />
+                                                    ));
+                                                })()}
+                                            </div>
+                                            <p className="text-[10px] text-muted-foreground mt-4">Averaged across {benchmarks.length} benchmark run{benchmarks.length > 1 ? 's' : ''}</p>
+                                        </motion.div>
 
-                                                <div className="grid grid-cols-2 lg:grid-cols-3 gap-8 flex-[2]">
-                                                    <BenchmarkMetric label="Root Cause Match" value={b.root_cause_match} />
-                                                    <BenchmarkMetric label="Fix Correctness" value={b.fix_correctness} />
-                                                    <div className="hidden lg:block">
-                                                        <BenchmarkMetric label="AI Confidence" value={b.confidence_score} color="text-yellow-500" />
-                                                    </div>
-                                                </div>
-                                            </motion.div>
-                                        ))}
-                                    </div>
+                                        {/* Individual Results */}
+                                        <div className="grid grid-cols-1 gap-6">
+                                            {benchmarks.map((b, i) => {
+                                                const matchedScenario = scenarios.find(s => s.id === b.scenario_id);
+                                                const diff = matchedScenario?.difficulty || 'medium';
+                                                const diffColors = { easy: 'bg-emerald-500/10 text-emerald-600', medium: 'bg-amber-500/10 text-amber-600', hard: 'bg-red-500/10 text-red-600' };
+
+                                                return (
+                                                    <motion.div
+                                                        key={i}
+                                                        initial={{ opacity: 0, y: 20 }}
+                                                        animate={{ opacity: 1, y: 0 }}
+                                                        transition={{ delay: i * 0.1, duration: 0.4 }}
+                                                        className="bg-card border border-border rounded-3xl p-6 shadow-sm flex flex-col md:flex-row md:items-center gap-8 group hover:border-indigo-500/30 transition-all card-glow"
+                                                    >
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center gap-3 mb-2">
+                                                                <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-500/10 text-indigo-600 rounded uppercase">Scenario</span>
+                                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${diffColors[diff]}`}>{diff.toUpperCase()}</span>
+                                                                <h4 className="font-bold text-lg text-foreground">{b.scenario_id}</h4>
+                                                            </div>
+                                                            <p className="text-xs text-muted-foreground">Evaluation completed via LLM-as-a-Judge</p>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-8 flex-[2]">
+                                                            <BenchmarkMetric label="Root Cause Match" value={b.root_cause_match} />
+                                                            <BenchmarkMetric label="Fix Correctness" value={b.fix_correctness} />
+                                                            <div className="hidden lg:block">
+                                                                <BenchmarkMetric label="AI Confidence" value={b.confidence_score} color="text-yellow-500" />
+                                                            </div>
+                                                        </div>
+                                                    </motion.div>
+                                                );
+                                            })}
+                                        </div>
+                                    </>
                                 )}
                             </motion.div>
                         )}
@@ -1305,10 +1602,10 @@ function App() {
                         )}
                     </AnimatePresence>
                 </div>
-            </main>
+            </main >
 
             {/* Overlay for Drawer */}
-            <AnimatePresence>
+            < AnimatePresence >
                 {selectedPod && (
                     <motion.div
                         initial={{ opacity: 0 }}
@@ -1318,11 +1615,12 @@ function App() {
                         className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
                         onClick={closeInspector}
                     />
-                )}
-            </AnimatePresence>
+                )
+                }
+            </AnimatePresence >
 
             {/* Right Drawer (SRE Inspector) */}
-            <AnimatePresence>
+            < AnimatePresence >
                 {selectedPod && (
                     <motion.div
                         initial={{ x: '100%', opacity: 0 }}
@@ -1520,6 +1818,18 @@ function App() {
                                                                     <div className="max-h-[150px] overflow-auto custom-scrollbar-thin">
                                                                         <pre className="whitespace-pre-wrap leading-relaxed">{executionResults[i].stdout || executionResults[i].stderr}</pre>
                                                                     </div>
+                                                                    {!executionResults[i].success && (
+                                                                        <div className="mt-4 pt-3 border-t border-rose-200/30 flex justify-end">
+                                                                            <button
+                                                                                onClick={() => handleRetryFix(diagnosis.fix_steps[i].command, executionResults[i].stderr || executionResults[i].stdout, i)}
+                                                                                disabled={executingCmd !== null}
+                                                                                className="flex items-center gap-2 px-3 py-1.5 bg-rose-500 text-white rounded-lg text-[9px] font-bold hover:bg-rose-600 transition-all shadow-sm active:scale-95 disabled:opacity-50"
+                                                                            >
+                                                                                <RefreshCw size={12} className={executingCmd === i ? 'animate-spin' : ''} />
+                                                                                SELF-CORRECT WITH AI
+                                                                            </button>
+                                                                        </div>
+                                                                    )}
                                                                     {executionResults[i].success && (
                                                                         <div className="mt-3 pt-3 border-t border-emerald-200/30 flex items-center gap-2">
                                                                             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -1569,11 +1879,11 @@ function App() {
                         </div>
                     </motion.div>
                 )}
-            </AnimatePresence>
+            </AnimatePresence >
 
 
 
-        </div>
+        </div >
     );
 }
 
@@ -1597,6 +1907,14 @@ function NavItem({ icon, label, active, onClick, badge }) {
 }
 
 function StatsCard({ label, value, icon, trend, onClick, active }) {
+    const iconGradients = {
+        'Health Score': 'from-indigo-600 to-purple-600',
+        'Running Pods': 'from-blue-500 to-cyan-500',
+        'Unhealthy': 'from-red-500 to-orange-500',
+        'Namespaces': 'from-purple-500 to-pink-500',
+    };
+    const iconGrad = iconGradients[label] || 'from-gray-500 to-gray-600';
+
     return (
         <motion.div
             whileHover={{ scale: 1.02, y: -2 }}
@@ -1610,12 +1928,12 @@ function StatsCard({ label, value, icon, trend, onClick, active }) {
                 <motion.div
                     whileHover={{ rotate: [0, -10, 10, 0] }}
                     transition={{ duration: 0.5 }}
-                    className="p-2.5 bg-muted rounded-xl transition-colors group-hover:bg-card group-hover:ring-1 group-hover:ring-border"
+                    className={`p-2.5 bg-gradient-to-br ${iconGrad} rounded-xl text-white shadow-sm`}
                 >
-                    {icon}
+                    {React.cloneElement(icon, { className: 'text-white' })}
                 </motion.div>
                 {trend && (
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${trend === 'Critical' ? 'bg-red-500/10 text-red-500' :
+                    <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${trend === 'Critical' ? 'bg-red-500/10 text-red-500' :
                         trend === 'Good' ? 'bg-green-500/10 text-green-500' :
                             'bg-blue-500/10 text-blue-500'
                         }`}>
@@ -1623,8 +1941,8 @@ function StatsCard({ label, value, icon, trend, onClick, active }) {
                     </span>
                 )}
             </div>
-            <div className="text-2xl font-bold font-outfit text-foreground">{value}</div>
-            <div className="text-[11px] font-medium text-muted-foreground mt-1 uppercase tracking-wider flex items-center gap-1">{label} <ChevronRight size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" /></div>
+            <div className="text-3xl font-bold font-outfit text-foreground tracking-tight">{value}</div>
+            <div className="text-[11px] font-semibold text-muted-foreground mt-1.5 uppercase tracking-wider flex items-center gap-1">{label} <ChevronRight size={10} className="opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" /></div>
         </motion.div>
     )
 }

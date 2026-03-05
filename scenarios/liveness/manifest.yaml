@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liveness-app
+  namespace: oncall-bench
+  labels:
+    app: liveness
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liveness
+  template:
+    metadata:
+      labels:
+        app: liveness
+    spec:
+      containers:
+      - name: app
+        image: busybox
+        command: ["sh", "-c", "echo 'App starting...'; sleep 5; echo 'App crashing'; exit 1"]
+        livenessProbe:
+          exec:
+            command: ["cat", "/tmp/healthy"]  # This file never exists
+          initialDelaySeconds: 2
+          periodSeconds: 3
+          failureThreshold: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: liveness-svc
+  namespace: oncall-bench
+spec:
+  selector:
+    app: liveness
+  ports:
+  - port: 80
+    targetPort: 80

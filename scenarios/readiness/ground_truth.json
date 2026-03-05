@@ -1,6 +1,9 @@
 {
     "scenario_id": "readiness",
     "name": "Readiness Probe Failure",
+    "difficulty": "medium",
+    "category": "probes",
+    "version": "1.0",
     "expected_symptoms": [
         "Pod status: Running but not Ready (Ready: 0/1)",
         "Event: Readiness probe failed: connection refused"

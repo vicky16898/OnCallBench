@@ -2,29 +2,71 @@ import json
 from kubernetes import client, config
 from typing import List, Optional, Dict, Any
 from schemas import PodStatus
+from utils import clean_k8s_object
 
-# Initialize K8s clients (moved from api.py)
+# Lazy K8s client initialization — re-reads kubeconfig when needed
+# so the backend survives minikube restarts (port changes).
 K8S_MODE = "kubeconfig"
-try:
-    config.load_kube_config()
-except Exception:
-    try:
-        config.load_incluster_config()
-        K8S_MODE = "in-cluster"
-    except Exception:
-        K8S_MODE = "error"
-        print("Warning: Could not load K8s config. Ensure you are in a K8s context.")
+_k8s_initialized = False
+v1 = None
+apps_v1 = None
+networking_v1 = None
 
-v1 = client.CoreV1Api()
-apps_v1 = client.AppsV1Api()
-networking_v1 = client.NetworkingV1Api()
+
+def _init_k8s_clients(force_reload=False):
+    """Load kubeconfig and (re)create API clients."""
+    global v1, apps_v1, networking_v1, K8S_MODE, _k8s_initialized
+
+    if _k8s_initialized and not force_reload:
+        return
+
+    try:
+        config.load_kube_config()
+        K8S_MODE = "kubeconfig"
+    except Exception:
+        try:
+            config.load_incluster_config()
+            K8S_MODE = "in-cluster"
+        except Exception:
+            K8S_MODE = "error"
+            print("Warning: Could not load K8s config. Ensure you are in a K8s context.")
+
+    v1 = client.CoreV1Api()
+    apps_v1 = client.AppsV1Api()
+    networking_v1 = client.NetworkingV1Api()
+    _k8s_initialized = True
+    print(f"K8s clients initialized (mode={K8S_MODE})")
+
+
+def _k8s_call(func, *args, _retry=True, **kwargs):
+    """Execute a K8s API call, auto-reloading kubeconfig on connection errors."""
+    global _k8s_initialized
+    _init_k8s_clients()  # ensure clients exist
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        err_str = str(e)
+        # Detect connection-refused / max-retries errors → stale kubeconfig
+        if _retry and ("NewConnectionError" in err_str or
+                       "Max retries exceeded" in err_str or
+                       "Connection refused" in err_str or
+                       "10061" in err_str):
+            print(f"K8s connection failed, reloading kubeconfig... ({err_str[:120]})")
+            _k8s_initialized = False
+            _init_k8s_clients(force_reload=True)
+            return func(*args, **kwargs)  # one retry with fresh clients
+        raise
+
+
+# Do an initial load so K8S_MODE is available immediately
+_init_k8s_clients()
 
 def get_namespaces_logic():
-    ns_list = v1.list_namespace()
+    ns_list = _k8s_call(v1.list_namespace)
     return [ns.metadata.name for ns in ns_list.items]
 
 def get_pods_logic(namespace: str):
-    pods = v1.list_namespaced_pod(namespace)
+    pods = _k8s_call(v1.list_namespaced_pod, namespace)
     pod_list = []
     for p in pods.items:
         # Check health
@@ -46,7 +88,7 @@ def get_pods_logic(namespace: str):
 
 def get_deployments_logic(namespace: str):
     print(f"DEBUG: get_deployments_logic called for namespace: {namespace}")
-    deps = apps_v1.list_namespaced_deployment(namespace)
+    deps = _k8s_call(apps_v1.list_namespaced_deployment, namespace)
     print(f"DEBUG: Found {len(deps.items)} deployments")
     result = []
     for d in deps.items:
@@ -95,7 +137,7 @@ def get_deployments_logic(namespace: str):
     return result
 
 def get_statefulsets_logic(namespace: str):
-    sts_list = apps_v1.list_namespaced_stateful_set(namespace)
+    sts_list = _k8s_call(apps_v1.list_namespaced_stateful_set, namespace)
     result = []
     for s in sts_list.items:
         desired = s.spec.replicas or 0
@@ -127,7 +169,7 @@ def get_statefulsets_logic(namespace: str):
     return result
 
 def get_daemonsets_logic(namespace: str):
-    ds_list = apps_v1.list_namespaced_daemon_set(namespace)
+    ds_list = _k8s_call(apps_v1.list_namespaced_daemon_set, namespace)
     result = []
     for d in ds_list.items:
         desired = d.status.desired_number_scheduled or 0
@@ -162,7 +204,7 @@ def get_daemonsets_logic(namespace: str):
     return result
 
 def get_events_logic(namespace: str):
-    events = v1.list_namespaced_event(namespace)
+    events = _k8s_call(v1.list_namespaced_event, namespace)
     result = []
     for e in events.items:
         result.append({
@@ -180,13 +222,13 @@ def get_events_logic(namespace: str):
     return result
 
 def get_services_logic(namespace: str):
-    svc_list = v1.list_namespaced_service(namespace)
+    svc_list = _k8s_call(v1.list_namespaced_service, namespace)
     result = []
     for s in svc_list.items:
         # Get endpoint count
         endpoint_count = 0
         try:
-            ep = v1.read_namespaced_endpoints(s.metadata.name, namespace)
+            ep = _k8s_call(v1.read_namespaced_endpoints, s.metadata.name, namespace)
             for subset in (ep.subsets or []):
                 endpoint_count += len(subset.addresses or [])
         except Exception:
@@ -217,7 +259,7 @@ def get_services_logic(namespace: str):
     return result
 
 def get_ingresses_logic(namespace: str):
-    ing_list = networking_v1.list_namespaced_ingress(namespace)
+    ing_list = _k8s_call(networking_v1.list_namespaced_ingress, namespace)
     result = []
     for i in ing_list.items:
         rules = []
@@ -254,7 +296,7 @@ def get_ingresses_logic(namespace: str):
     return result
 
 def get_network_policies_logic(namespace: str):
-    np_list = networking_v1.list_namespaced_network_policy(namespace)
+    np_list = _k8s_call(networking_v1.list_namespaced_network_policy, namespace)
     result = []
     for n in np_list.items:
         ingress_rules = len(n.spec.ingress or []) if n.spec.ingress is not None else 0
@@ -274,11 +316,11 @@ def get_network_policies_logic(namespace: str):
     return result
 
 def get_topology_logic(namespace: str):
-    deps = apps_v1.list_namespaced_deployment(namespace)
-    sts = apps_v1.list_namespaced_stateful_set(namespace)
-    ds = apps_v1.list_namespaced_daemon_set(namespace)
-    pods = v1.list_namespaced_pod(namespace)
-    svcs = v1.list_namespaced_service(namespace)
+    deps = _k8s_call(apps_v1.list_namespaced_deployment, namespace)
+    sts = _k8s_call(apps_v1.list_namespaced_stateful_set, namespace)
+    ds = _k8s_call(apps_v1.list_namespaced_daemon_set, namespace)
+    pods = _k8s_call(v1.list_namespaced_pod, namespace)
+    svcs = _k8s_call(v1.list_namespaced_service, namespace)
 
     nodes = []
     edges = []
@@ -340,7 +382,7 @@ def get_topology_logic(namespace: str):
             owner = p.metadata.owner_references[0]
             if owner.kind == "ReplicaSet":
                 try:
-                    rs = apps_v1.read_namespaced_replica_set(owner.name, namespace)
+                    rs = _k8s_call(apps_v1.read_namespaced_replica_set, owner.name, namespace)
                     if rs.metadata.owner_references:
                         parent = rs.metadata.owner_references[0]
                         edges.append({"from": f"deploy/{parent.name}", "to": pod_id})
@@ -361,7 +403,7 @@ def get_topology_logic(namespace: str):
         # Count endpoints
         ep_count = 0
         try:
-            ep = v1.read_namespaced_endpoints(svc.metadata.name, namespace)
+            ep = _k8s_call(v1.read_namespaced_endpoints, svc.metadata.name, namespace)
             for subset in (ep.subsets or []):
                 ep_count += len(subset.addresses or [])
         except Exception:
@@ -390,12 +432,12 @@ def get_stats_logic(namespace: Optional[str] = None):
     
     try:
         # Get total namespace count regardless of current filter
-        ns_count = len(v1.list_namespace().items)
+        ns_count = len(_k8s_call(v1.list_namespace).items)
 
         if namespace and namespace != "all":
-            pods = v1.list_namespaced_pod(namespace)
+            pods = _k8s_call(v1.list_namespaced_pod, namespace)
         else:
-            pods = v1.list_pod_for_all_namespaces()
+            pods = _k8s_call(v1.list_pod_for_all_namespaces)
         
         total = len(pods.items)
         for p in pods.items:
@@ -426,8 +468,8 @@ def get_stats_logic(namespace: Optional[str] = None):
 
 def gather_pod_data_for_diagnosis(namespace: str, pod_name: str):
     # 1. Collect enhanced live data
-    pod = v1.read_namespaced_pod(pod_name, namespace)
-    events = v1.list_namespaced_event(namespace, field_selector=f"involvedObject.name={pod_name}")
+    pod = _k8s_call(v1.read_namespaced_pod, pod_name, namespace)
+    events = _k8s_call(v1.list_namespaced_event, namespace, field_selector=f"involvedObject.name={pod_name}")
     
     # Get related resources (Deployment/ReplicaSet)
     owner_info = "Standalone Pod"
@@ -437,24 +479,26 @@ def gather_pod_data_for_diagnosis(namespace: str, pod_name: str):
         owner_info = f"{owner.kind}/{owner.name}"
         try:
             if owner.kind == "ReplicaSet":
-                rs = apps_v1.read_namespaced_replica_set(owner.name, namespace)
+                rs = _k8s_call(apps_v1.read_namespaced_replica_set, owner.name, namespace)
                 if rs.metadata.owner_references:
                     parent = rs.metadata.owner_references[0]
                     owner_info = f"{parent.kind}/{parent.name}"
                     if parent.kind == "Deployment":
-                        parent_spec = apps_v1.read_namespaced_deployment(parent.name, namespace).to_dict()
+                        dep = _k8s_call(apps_v1.read_namespaced_deployment, parent.name, namespace).to_dict()
+                        parent_spec = clean_k8s_object(dep)
             elif owner.kind == "StatefulSet":
-                parent_spec = apps_v1.read_namespaced_stateful_set(owner.name, namespace).to_dict()
+                sts = _k8s_call(apps_v1.read_namespaced_stateful_set, owner.name, namespace).to_dict()
+                parent_spec = clean_k8s_object(sts)
         except Exception:
             pass
 
     logs = ""
     try:
-        logs = v1.read_namespaced_pod_log(pod_name, namespace, tail_lines=150)
+        logs = _k8s_call(v1.read_namespaced_pod_log, pod_name, namespace, tail_lines=150)
     except Exception:
         try:
             # Try previous logs if it's crashlooping
-            logs = v1.read_namespaced_pod_log(pod_name, namespace, tail_lines=150, previous=True)
+            logs = _k8s_call(v1.read_namespaced_pod_log, pod_name, namespace, tail_lines=150, previous=True)
             logs = f"PREVIOUS LOGS:\n{logs}"
         except Exception:
             logs = "No logs available."
@@ -465,14 +509,23 @@ def gather_pod_data_for_diagnosis(namespace: str, pod_name: str):
     for cs in (pod.status.container_statuses or []):
         if not cs.ready:
             is_healthy = False
+        state_dict = {}
+        if cs.state:
+            if cs.state.running:
+                state_dict["running"] = {"started_at": str(cs.state.running.started_at)}
+            if cs.state.waiting:
+                state_dict["waiting"] = {"reason": cs.state.waiting.reason, "message": cs.state.waiting.message}
+            if cs.state.terminated:
+                state_dict["terminated"] = {"reason": cs.state.terminated.reason, "exit_code": cs.state.terminated.exit_code}
+        
         container_statuses_summary.append({
             "name": cs.name,
             "ready": cs.ready,
             "restart_count": cs.restart_count,
-            "state": str(cs.state)
+            "state": state_dict
         })
 
-    return {
+    result = {
         "pod": pod,
         "events": events,
         "logs": logs,
@@ -481,6 +534,46 @@ def gather_pod_data_for_diagnosis(namespace: str, pod_name: str):
         "parent_spec": parent_spec,
         "container_statuses_summary": container_statuses_summary
     }
+
+    # For Pending pods: include resource requests and node capacity so the AI can diagnose scheduling failures
+    if pod.status.phase == "Pending":
+        is_healthy = False
+        result["is_healthy"] = False
+        
+        # Extract container resource requests from the pod spec
+        resource_requests = []
+        for container in (pod.spec.containers or []):
+            req = {}
+            if container.resources:
+                if container.resources.requests:
+                    req["requests"] = dict(container.resources.requests)
+                if container.resources.limits:
+                    req["limits"] = dict(container.resources.limits)
+            resource_requests.append({
+                "container_name": container.name,
+                "resources": req
+            })
+        result["resource_requests"] = resource_requests
+        
+        # Include node capacity information
+        try:
+            nodes = _k8s_call(v1.list_node)
+            node_info = []
+            for node in nodes.items:
+                alloc = node.status.allocatable or {}
+                cap = node.status.capacity or {}
+                node_info.append({
+                    "name": node.metadata.name,
+                    "allocatable_cpu": alloc.get("cpu", "unknown"),
+                    "allocatable_memory": alloc.get("memory", "unknown"),
+                    "capacity_cpu": cap.get("cpu", "unknown"),
+                    "capacity_memory": cap.get("memory", "unknown"),
+                })
+            result["node_capacity"] = node_info
+        except Exception:
+            pass
+
+    return result
 
 def search_resources_logic(query: str):
     """Searches for resources by name across all namespaces."""
@@ -492,7 +585,7 @@ def search_resources_logic(query: str):
     
     # Search Pods
     try:
-        pods = v1.list_pod_for_all_namespaces()
+        pods = _k8s_call(v1.list_pod_for_all_namespaces)
         for p in pods.items:
             if query in p.metadata.name.lower():
                 results.append({
@@ -507,7 +600,7 @@ def search_resources_logic(query: str):
 
     # Search Deployments
     try:
-        deps = apps_v1.list_deployment_for_all_namespaces()
+        deps = _k8s_call(apps_v1.list_deployment_for_all_namespaces)
         for d in deps.items:
             if query in d.metadata.name.lower():
                 results.append({
@@ -522,7 +615,7 @@ def search_resources_logic(query: str):
 
     # Search Services
     try:
-        svcs = v1.list_service_for_all_namespaces()
+        svcs = _k8s_call(v1.list_service_for_all_namespaces)
         for s in svcs.items:
             if query in s.metadata.name.lower():
                 results.append({
@@ -537,7 +630,7 @@ def search_resources_logic(query: str):
 
     # Search Ingresses
     try:
-        ings = networking_v1.list_ingress_for_all_namespaces()
+        ings = _k8s_call(networking_v1.list_ingress_for_all_namespaces)
         for i in ings.items:
             if query in i.metadata.name.lower():
                 results.append({
@@ -555,10 +648,10 @@ def search_resources_logic(query: str):
 def get_pod_logs_logic(namespace: str, pod_name: str, tail: int = 200):
     """Fetches logs for a pod, with fallback to previous logs."""
     try:
-        return v1.read_namespaced_pod_log(pod_name, namespace, tail_lines=tail)
+        return _k8s_call(v1.read_namespaced_pod_log, pod_name, namespace, tail_lines=tail)
     except Exception:
         try:
-            prev_logs = v1.read_namespaced_pod_log(pod_name, namespace, tail_lines=tail, previous=True)
+            prev_logs = _k8s_call(v1.read_namespaced_pod_log, pod_name, namespace, tail_lines=tail, previous=True)
             return f"PREVIOUS LOGS (CRASHED):\n{prev_logs}"
         except Exception:
             return "No logs available."

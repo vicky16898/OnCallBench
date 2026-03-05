@@ -1,6 +1,9 @@
 {
     "scenario_id": "imagepull",
     "name": "ImagePullBackOff due to Invalid Tag",
+    "difficulty": "easy",
+    "category": "container",
+    "version": "1.0",
     "expected_symptoms": [
         "Pod status: ImagePullBackOff",
         "Event: Failed to pull image",

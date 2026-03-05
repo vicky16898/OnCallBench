@@ -5,10 +5,22 @@ import shlex
 from pathlib import Path
 from rich.console import Console
 from openai import OpenAI
-import google.generativeai as genai
+from google import genai
 from typing import Dict, Any, List
+from utils import extract_json_from_text
+from dotenv import load_dotenv
 
+load_dotenv()
 console = Console()
+
+def load_system_prompt() -> str:
+    """Load the SRE system prompt from an external template file.
+    Returns a fallback prompt if the file is missing.
+    """
+    template_path = Path(__file__).parent / "prompt_templates" / "k8s_system_prompt.txt"
+    if template_path.is_file():
+        return template_path.read_text(encoding="utf-8")
+    return "You are a Principal SRE. Diagnose Kubernetes incidents using the provided bundle and available tools."
 
 def run_kubectl_tool(command: str):
     """Executes a kubectl command safely for the agent."""
@@ -30,8 +42,8 @@ def run_kubectl_tool(command: str):
         is_win = sys.platform == 'win32'
         
         if is_win:
-            # Reconstruct string for Windows shell resolution
-            cmd_to_run = " ".join(f'"{a}"' if " " in a or "\\" in a else a for a in parts)
+            # Reconstruct string for Windows shell resolution using official tool
+            cmd_to_run = subprocess.list2cmdline(parts)
             result = subprocess.run(cmd_to_run, capture_output=True, text=True, timeout=15, shell=True)
         else:
             result = subprocess.run(parts, capture_output=True, text=True, timeout=15, shell=False)
@@ -64,6 +76,50 @@ def cluster_wide_health_tool():
     except Exception as e:
         return f"Error fetching cluster health: {str(e)}"
 
+def investigate_resource(kind: str, name: str, namespace: str):
+    """Fetches full YAML for any K8s resource for deep inspection."""
+    try:
+        cmd = f"kubectl get {kind} {name} -n {namespace} -o yaml"
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, shell=True)
+        return res.stdout if res.returncode == 0 else res.stderr
+    except Exception as e:
+        return str(e)
+
+def search_logs(pod_name: str, namespace: str, query: str = None):
+    """Retrieves logs with optional search filtering."""
+    try:
+        cmd = f"kubectl logs {pod_name} -n {namespace} --tail=200"
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, shell=True)
+        logs = res.stdout if res.returncode == 0 else res.stderr
+        
+        if query and res.returncode == 0:
+            lines = [l for l in logs.splitlines() if query.lower() in l.lower()]
+            return "\n".join(lines) if lines else f"No log lines found matching: {query}"
+        return logs
+    except Exception as e:
+        return str(e)
+
+def check_metrics(target: str, namespace: str = None):
+    """Retrieves resource usage (CPU/Mem)."""
+    try:
+        if target == "nodes":
+            cmd = "kubectl top nodes"
+        else:
+            cmd = f"kubectl top pods -n {namespace}" if namespace else "kubectl top pods --all-namespaces"
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, shell=True)
+        return res.stdout if res.returncode == 0 else "Metrics API may not be available: " + res.stderr
+    except Exception as e:
+        return str(e)
+
+def list_namespace_resources(namespace: str):
+    """Lists all common resources in a namespace."""
+    try:
+        cmd = f"kubectl get all,configmap,secret,ingress,netpol -n {namespace}"
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, shell=True)
+        return res.stdout if res.returncode == 0 else res.stderr
+    except Exception as e:
+        return str(e)
+
 from dotenv import load_dotenv
 
 # Ensure environment variables are loaded
@@ -81,13 +137,9 @@ class DebuggerAgent:
             if not self.api_key:
                  raise ValueError("Missing GOOGLE_API_KEY in .env")
             self.model = model or "gemini-2.0-flash"
-            genai.configure(api_key=self.api_key)
-            # Define tools for Gemini
-            self.tools = [run_kubectl_tool, cluster_wide_health_tool]
-            self.client = genai.GenerativeModel(
-                model_name=self.model,
-                tools=self.tools
-            )
+            self.client = genai.Client(api_key=self.api_key)
+            # For Gemini 2.0 via google-genai, tools are passed during generation
+            self.tools = [run_kubectl_tool, cluster_wide_health_tool, investigate_resource, search_logs, check_metrics, list_namespace_resources]
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
@@ -96,10 +148,21 @@ class DebuggerAgent:
         console.print(f"[bold blue]Agent ({self.provider}) starting multi-step diagnosis...[/bold blue]")
         self.investigation_steps = [{"command": "Initial Triage", "findings": "Analyzing pod metadata, logs, and events bundle..."}]
         
-        if self.provider == "openai":
-            return self._diagnose_openai(bundle)
-        elif self.provider == "google":
-            return self._diagnose_google(bundle)
+        try:
+            if self.provider == "openai":
+                return self._diagnose_openai(bundle)
+            elif self.provider == "google":
+                return self._diagnose_google(bundle)
+        except Exception as e:
+            console.print(f"[bold red]AI Diagnosis Failed: {str(e)}[/bold red]")
+            return {
+                "root_cause": f"AI Analysis Failed: {str(e)}",
+                "symptoms": ["System error during diagnosis"],
+                "fix_summary": "Please check your API keys and network connection.",
+                "fix_steps": [{"label": "Troubleshoot Agent", "command": "echo Check logs", "reasoning": "AI provider returned an error", "type": "manual"}],
+                "confidence_score": 0.0,
+                "risk_level": "High"
+            }
 
     def _diagnose_openai(self, bundle):
         # OpenAI implementation with tool-calling
@@ -125,26 +188,77 @@ class DebuggerAgent:
                     "description": "Check cluster nodes and resource usage to see if the issue is global (e.g. Node Pressure).",
                     "parameters": {"type": "object", "properties": {}}
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "investigate_resource",
+                    "description": "Get full details of any K8s resource (Deployment, Service, Secret, etc.) if you suspect it is related to the issue.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "description": "e.g., Service, Secret, ConfigMap, RoleBinding"},
+                            "name": {"type": "string", "description": "The name of the resource"},
+                            "namespace": {"type": "string", "description": "The namespace of the resource"}
+                        },
+                        "required": ["kind", "name", "namespace"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_logs",
+                    "description": "Retrieve logs for a pod with optional filtering to find specific error strings.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pod_name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                            "query": {"type": "string", "description": "Optional search term to filter logs (e.g., 'Error', 'Timeout', 'Connection refused')"}
+                        },
+                        "required": ["pod_name", "namespace"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "check_metrics",
+                    "description": "Get real-time CPU/Memory usage for nodes or pods.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target": {"type": "string", "enum": ["nodes", "pods"]},
+                            "namespace": {"type": "string", "description": "Required if target is 'pods'"}
+                        },
+                        "required": ["target"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_namespace_resources",
+                    "description": "List all resources (Deployments, Services, Ingresses, etc.) in a namespace to understand the environment.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string"}
+                        },
+                        "required": ["namespace"]
+                    }
+                }
             }
         ]
+
+        # triage_hint is already set by the caller (api.py run_diagnosis) based on pod state.
+        # No need to duplicate that logic here — it arrives in the bundle.
         
+        # Load dynamic system prompt from external template
+        system_prompt = load_system_prompt()
         messages = [
-            {"role": "system", "content": """You are a Principal SRE. Your goal is to find the technical root cause of a K8s incident.
-            
-            STRATEGY:
-            1. Analyze the initial bundle.
-            2. Run extra kubectl commands to verify your theory.
-            3. Use 'cluster_wide_health_tool' if you suspect the node is over capacity or healthy pods are failing across the cluster.
-            4. If you find a clear fix, provide it.
-            
-            OUTPUT FORMAT (JSON):
-            - root_cause: string
-            - symptoms: list of strings
-            - fix_summary: string
-            - fix_steps: list of {label, command, reasoning, type: "kubectl"|"manual"|"investigation"}
-            - confidence_score: float
-            - risk_level: High|Medium|Low
-            """},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Initial Incident Bundle:\n{json.dumps(bundle, default=str)[:10000]}"}
         ]
         
@@ -156,14 +270,31 @@ class DebuggerAgent:
             
             for tool_call in msg.tool_calls:
                 name = tool_call.function.name
+                args = json.loads(tool_call.function.arguments)
+                
                 if name == "run_kubectl_tool":
-                    args = json.loads(tool_call.function.arguments)
                     cmd = args['command']
                     console.print(f"[dim]Running: {cmd}[/dim]")
                     result = run_kubectl_tool(cmd)
+                elif name == "investigate_resource":
+                    cmd = f"kubectl get {args['kind']} {args['name']} -n {args['namespace']}"
+                    console.print(f"[dim]Investigating: {cmd}[/dim]")
+                    result = investigate_resource(args['kind'], args['name'], args['namespace'])
+                elif name == "search_logs":
+                    cmd = f"kubectl logs {args['pod_name']} (search: {args.get('query', 'N/A')})"
+                    console.print(f"[dim]Searching Logs: {cmd}[/dim]")
+                    result = search_logs(args['pod_name'], args['namespace'], args.get('query'))
+                elif name == "check_metrics":
+                    cmd = f"kubectl top {args['target']}"
+                    console.print(f"[dim]Checking Metrics: {cmd}[/dim]")
+                    result = check_metrics(args['target'], args.get('namespace'))
+                elif name == "list_namespace_resources":
+                    cmd = f"kubectl get all -n {args['namespace']}"
+                    console.print(f"[dim]Listing Resources in {args['namespace']}[/dim]")
+                    result = list_namespace_resources(args['namespace'])
                 else: # cluster_wide_health_tool
-                    cmd = "cluster check"
-                    console.print(f"[dim]Running: {cmd}[/dim]")
+                    cmd = "kubectl top nodes/nodes info"
+                    console.print(f"[dim]Cluster Health Check[/dim]")
                     result = cluster_wide_health_tool()
                 
                 self.investigation_steps.append({
@@ -180,73 +311,96 @@ class DebuggerAgent:
         return diagnosis
 
     def _diagnose_google(self, bundle):
-        # Gemini implementation with native tool-calling
-        chat = self.client.start_chat(enable_automatic_function_calling=True)
+        # Gemini implementation with native tool-calling via google-genai
+        # Load dynamic system prompt from external template (same as OpenAI path)
+        system_prompt = load_system_prompt()
         
-        system_instructions = """You are a Principal SRE. Find the technical root cause of this K8s incident.
-        Analyze the bundle, run extra commands if needed, and provide the fix.
+        chat = self.client.chats.create(
+            model=self.model,
+            config={
+                "tools": self.tools,
+                "system_instruction": system_prompt
+            }
+        )
         
-        INVESTIGATION LOG:
-        Every tool you call will be recorded. Use them to prove your theories.
-        If a pod is OOMKilled or Pending, check cluster health to see if the node is full.
+        prompt = f"""INVESTIGATION: Every tool you call will be recorded. Use them to prove your theories.
         
-        CRITICAL RULES FOR FIXES:
-        1. NEVER suggest interactive commands like 'kubectl edit' or 'kubectl exec -it'.
-        2. ALWAYS prioritize 'kubectl set image' for image issues.
-        3. ALWAYS prioritize 'kubectl patch' for configuration/env/resource issues.
-        4. If the command can be run non-interactively, use type: "kubectl".
+        - For kubectl patch: -p value MUST be a JSON object with the FULL path starting at {{"spec":{{"template":{{"spec":...}}}}}}. NEVER a bare array.
+        - K8s Structure: Containers go under spec.template.spec.containers. Volumes go under spec.template.spec.volumes.
+        - Be an expert: diagnose → verify → provide minimal but sufficient fix steps.
         
         OUTPUT FORMAT (JSON):
-        {
+        {{
           "root_cause": "string",
           "symptoms": ["string"],
           "fix_summary": "string",
-          "fix_steps": [{"label": "string", "command": "string", "reasoning": "string", "type": "kubectl|manual|investigation"}],
+          "fix_steps": [{{"label": "string", "command": "string", "reasoning": "string", "type": "kubectl|manual|investigation"}}],
           "confidence_score": 0.9,
           "risk_level": "Low"
-        }"""
+        }}
         
-        prompt = f"{system_instructions}\n\nIncident Bundle:\n{json.dumps(bundle, default=str)[:10000]}"
+        Respond only with the valid JSON object. Do not add markdown backticks, EOF, or any other explanations.
+        Incident Bundle:
+        {json.dumps(bundle, default=str)[:50000]}"""
         
-        response = chat.send_message(prompt)
-        text = response.text
-        
-        # Manually extract investigation steps for Gemini since it's automatic tool calling
-        # Link function calls with their responses from history
-        calls = {}
-        for history in chat.history:
-            if history.role == "model" and history.parts:
-                for part in history.parts:
-                    if hasattr(part, 'function_call') and part.function_call:
-                        calls[part.function_call.name] = part.function_call.args.get('command', part.function_call.name)
-            elif history.role == "user" and history.parts:
-                for part in history.parts:
-                    if hasattr(part, 'function_response') and part.function_response:
-                        name = part.function_response.name
-                        # If we have a call for this, record it
-                        cmd = calls.get(name, name)
-                        resp = str(part.function_response.response.get('result', 'Executed successfully.'))
-                        self.investigation_steps.append({
-                            "command": cmd,
-                            "findings": resp[:500] + "..." if len(resp) > 500 else resp
-                        })
-
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-            
         try:
-            diagnosis = json.loads(text.strip())
+            response = chat.send_message(prompt)
+            text = response.text
+            
+            # Extract investigation steps from history
+            # In google-genai, history is accessed via get_history()
+            calls = {}
+            for msg in chat.get_history():
+                if msg.role == "model":
+                    for part in msg.parts:
+                        if part.function_call:
+                            # Map function call to its arguments
+                            fn = part.function_call
+                            args = fn.args
+                            # Some SDK versions might return args as a string
+                            if isinstance(args, str):
+                                try:
+                                     args = json.loads(args)
+                                except:
+                                     args = {}
+                            
+                            cmd = args.get("command", fn.name) if isinstance(args, dict) else fn.name
+                            calls[fn.name] = cmd
+                elif msg.role == "user" or msg.role == "tool":
+                    for part in msg.parts:
+                        if part.function_response:
+                            fn_resp = part.function_response
+                            cmd = calls.get(fn_resp.name, fn_resp.name)
+                            # Handle different response types (result vs content)
+                            res_obj = fn_resp.response
+                            # Robust extraction: res_obj might be a dict or an object depending on version
+                            if isinstance(res_obj, dict):
+                                resp_text = str(res_obj.get("result", res_obj))
+                            else:
+                                try:
+                                    resp_text = str(getattr(res_obj, 'result', res_obj))
+                                except:
+                                    resp_text = str(res_obj)
+                            
+                            self.investigation_steps.append({
+                                "command": cmd,
+                                "findings": resp_text[:500] + "..." if len(resp_text) > 500 else resp_text
+                            })
+        except Exception as e:
+            print(f"Agent Error: {e}")
+            text = str(e)
+
+        diagnosis = extract_json_from_text(text)
+        if diagnosis:
             diagnosis["investigation_steps"] = self.investigation_steps
             return diagnosis
-        except Exception:
-            return {
-                "root_cause": text[:500],
-                "symptoms": ["Analysis completed"],
-                "fix_summary": "Manual review needed",
-                "fix_steps": [{"label": "Review pods", "command": "kubectl get pods", "reasoning": "Fallback", "type": "manual"}],
-                "investigation_steps": self.investigation_steps,
-                "confidence_score": 0.5,
-                "risk_level": "Medium"
-            }
+            
+        return {
+            "root_cause": text[:500],
+            "symptoms": ["Analysis completed"],
+            "fix_summary": "Manual review needed",
+            "fix_steps": [{"label": "Review pods", "command": "kubectl get pods", "reasoning": "Fallback", "type": "manual"}],
+            "investigation_steps": self.investigation_steps,
+            "confidence_score": 0.5,
+            "risk_level": "Medium"
+        }

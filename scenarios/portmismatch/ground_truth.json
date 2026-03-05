@@ -1,0 +1,17 @@
+{
+    "scenario_id": "portmismatch",
+    "name": "Service & Probe Port Mismatch",
+    "difficulty": "hard",
+    "category": "networking",
+    "version": "1.0",
+    "expected_symptoms": [
+        "Pod is Running but NOT Ready (0/1)",
+        "Readiness probe failed: connection refused on port 9090",
+        "Service targetPort 9090 does not match container port 80"
+    ],
+    "root_cause": "Both the readiness probe and the Service targetPort are configured for port 9090, but the nginx container only listens on port 80. The pod stays Not Ready and the Service cannot route traffic.",
+    "fix_steps": "Update both the readinessProbe port and the Service targetPort from 9090 to 80.",
+    "confirm_commands": [
+        "kubectl get pod -l app=portmismatch -n oncall-bench -o jsonpath='{.items[0].status.containerStatuses[0].ready}'"
+    ]
+}
