@@ -131,7 +131,7 @@ kubectl create secret generic oncall-secrets \
   -n oncall-bench --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -f k8s/deploy.yaml
-minikube service oncall-frontend -n oncall-bench
+minikube service oncall-frontend -n oncall-system
 ```
 
 ---
@@ -173,6 +173,89 @@ k8s/deploy.yaml       # Full K8s deployment manifest
 | AI | Gemini 2.0 Flash, multi-turn tool calling |
 | Scoring | LLM-as-a-Judge evaluation |
 | Monitoring | K8s Watch API |
+
+---
+
+## Contributing
+
+Contributions are welcome! Whether it's a bug fix, new scenario, UI improvement, or documentation update — we appreciate it.
+
+### How to contribute
+
+**1. Create an issue**
+
+Before writing any code, [open an issue](../../issues/new) describing what you want to change or add. This lets us discuss the approach and avoid duplicate work. Include:
+- A clear title and description
+- Steps to reproduce (for bugs)
+- Expected vs. actual behavior (for bugs)
+- Your proposed approach (for features)
+
+**2. Fork the repository**
+
+Click the **Fork** button at the top-right of this repo to create your own copy.
+
+```bash
+# Clone your fork
+git clone https://github.com/YOUR_USERNAME/OnCallBench.git
+cd OnCallBench
+
+# Add the upstream remote
+git remote add upstream https://github.com/ORIGINAL_OWNER/OnCallBench.git
+```
+
+**3. Create a branch**
+
+Always branch off of `main`. Use a descriptive branch name that references the issue number:
+
+```bash
+git checkout main
+git pull upstream main
+git checkout -b fix/issue-42-crashloop-scoring
+```
+
+Branch naming conventions:
+| Prefix | Use case |
+|--------|----------|
+| `feat/` | New features |
+| `fix/` | Bug fixes |
+| `docs/` | Documentation changes |
+| `test/` | Adding or updating tests |
+| `refactor/` | Code refactoring |
+
+**4. Make your changes**
+
+- Follow the existing code style and project structure
+- Test your changes locally (both backend and frontend if applicable)
+- Keep commits focused and write clear commit messages
+
+```bash
+git add .
+git commit -m "fix: correct scoring logic for CrashLoop scenario (#42)"
+```
+
+**5. Submit a pull request**
+
+Push your branch and open a PR against `main`:
+
+```bash
+git push origin fix/issue-42-crashloop-scoring
+```
+
+Then go to your fork on GitHub and click **"Compare & pull request"**. In the PR description:
+- Reference the issue (e.g., `Closes #42`)
+- Describe what you changed and why
+- Include screenshots for UI changes
+- Note any testing you did
+
+### Code style
+
+- **Python** — follow PEP 8, use type hints where possible
+- **JavaScript/React** — use functional components with hooks
+- **Commits** — use [Conventional Commits](https://www.conventionalcommits.org/) format (`feat:`, `fix:`, `docs:`, etc.)
+
+### First time contributing?
+
+Look for issues labeled **`good first issue`** — these are beginner-friendly and a great way to get started.
 
 ---
 

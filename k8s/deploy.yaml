@@ -1,3 +1,12 @@
+# ── Namespaces ──────────────────────────────────────────────────
+# oncall-system: the app itself (backend, frontend, RBAC)
+# oncall-bench:  sandbox for injected failure scenarios (safe to nuke)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: oncall-system
+
+---
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -9,7 +18,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: oncall-admin
-  namespace: oncall-bench
+  namespace: oncall-system
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -18,7 +27,7 @@ metadata:
   name: oncall-admin-role
 rules:
 - apiGroups: ["", "apps", "networking.k8s.io", "batch"]
-  resources: ["pods", "pods/log", "events", "namespaces", "deployments", "services", "networkpolicies", "jobs", "replicasets", "statefulsets", "daemonsets", "ingresses"]
+  resources: ["pods", "pods/log", "events", "namespaces", "deployments", "services", "configmaps", "secrets", "networkpolicies", "jobs", "replicasets", "statefulsets", "daemonsets", "ingresses"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 ---
@@ -29,7 +38,7 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: oncall-admin
-  namespace: oncall-bench
+  namespace: oncall-system
 roleRef:
   kind: ClusterRole
   name: oncall-admin-role
@@ -41,10 +50,10 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: oncall-secrets
-  namespace: oncall-bench
+  namespace: oncall-system
 type: Opaque
 stringData:
-  GOOGLE_API_KEY: "REPLACE_WITH_YOUR_KEY"
+  GOOGLE_API_KEY: "replace_with_your_key"
 
 ---
 # 3. Backend - The FastAPI engine
@@ -52,7 +61,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: oncall-backend
-  namespace: oncall-bench
+  namespace: oncall-system
 spec:
   replicas: 1
   selector:
@@ -66,7 +75,7 @@ spec:
       serviceAccountName: oncall-admin
       containers:
       - name: backend
-        image: oncall-backend:latest  # Use 'minikube image load' or your registry
+        image: oncall-backend:latest
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
@@ -76,12 +85,19 @@ spec:
             secretKeyRef:
               name: oncall-secrets
               key: GOOGLE_API_KEY
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 512Mi
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: oncall-backend
-  namespace: oncall-bench
+  namespace: oncall-system
 spec:
   selector:
     app: oncall-backend
@@ -95,7 +111,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: oncall-frontend
-  namespace: oncall-bench
+  namespace: oncall-system
 spec:
   replicas: 1
   selector:
@@ -108,18 +124,25 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: oncall-frontend:latest # Use 'minikube image load' or your registry
+        image: oncall-frontend:latest
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 80
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: oncall-frontend
-  namespace: oncall-bench
+  namespace: oncall-system
 spec:
-  type: NodePort # Easier for Minikube
+  type: NodePort
   selector:
     app: oncall-frontend
   ports:
