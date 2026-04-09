@@ -21,7 +21,7 @@ It also watches your cluster in the background and catches problems before you d
 
 ![Alerts](docs/screenshots/alerts.png)
 
-**AI diagnosis** — click any pod, the agent runs a multi-turn investigation using Gemini 2.0 Flash with 6 tools:
+**AI diagnosis** — click any pod, the agent runs a multi-turn investigation using Gemini 3.1 Pro with 6 tools:
 - `run_kubectl` — safe subset of kubectl commands
 - `search_logs` — filtered log search across containers
 - `investigate_resource` — deep YAML inspection of any resource
