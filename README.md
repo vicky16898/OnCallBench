@@ -170,7 +170,7 @@ k8s/deploy.yaml       # Full K8s deployment manifest
 |---|---|
 | Frontend | React 18, Vite, Tailwind, Framer Motion |
 | Backend | FastAPI, Kubernetes Python Client |
-| AI | Gemini 2.0 Flash, multi-turn tool calling |
+| AI | Gemini, multi-turn tool calling |
 | Scoring | LLM-as-a-Judge evaluation |
 | Monitoring | K8s Watch API |
 
